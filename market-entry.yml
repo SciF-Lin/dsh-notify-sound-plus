@@ -1,17 +1,17 @@
 # 目录条目草稿 —— 提交到 awesome-dsh-plugin 仓库时用
 #
-# 目标路径：data/plugins/<owner>__<repo>.yml
+# 目标路径：data/plugins/SciF-Lin__dsh-notify-sound-plus.yml
 # 目标仓库：https://github.com/awesome-dsh-plugin/awesome-dsh-plugin
 #
 # ⚠️ 提交前必须：
-#   1) 把 <you> 换成你的 GitHub 用户名（url 必须与仓库地址完全一致）
-#   2) 确认仓库已公开、已打 dsh-plugin topic、且创建满 1 天
+#   1) 确认仓库已公开、已打 dsh-plugin topic、且创建满 1 天
+#   本插件对应的仓库：https://github.com/SciF-Lin/dsh-notify-sound-plus
 #
 # ⚠️ YAML 注意：description 里含 ": " 会被解析成嵌套键，所以这里用单引号包住。
 
-url: https://github.com/<you>/dsh-notify-sound-plus
-name: <you>/dsh-notify-sound-plus
+url: https://github.com/SciF-Lin/dsh-notify-sound-plus
+name: SciF-Lin/dsh-notify-sound-plus
 category: notify
 description:
-  en: 'Four synthesized notification sounds for DeepSeek Harness — turn-complete, question, approval and error — each independently configurable and auditionable from a General-settings row, with optional custom audio upload and a temporary mute button in the composer. Zero bundled audio assets: every tone is generated at runtime with the Web Audio API. Works on both the web GUI and the Electron desktop app.'
-  zh: 'DSH 提示音插件：任务完成 / 需要回答 / 需要授权 / 出错四类事件各用一段 Web Audio 实时合成的旋律提醒，可在「通用设置」里逐个试听与选音、上传自定义音频，对话输入框左下角有临时静音喇叭；不随包分发任何音频文件；网页端与桌面端（Electron）均可用。'
+  en: 'Four distinct notification sounds for DeepSeek Harness — turn-complete, question, approval and error — each configurable and previewable from a row in General settings: pick a mode from a dropdown (on, off, or smart to defer to the whale widget so the two never overlap), audition and change the sound per event, upload your own audio, and mute temporarily from a speaker button in the composer. Every built-in tone is synthesized at runtime with the Web Audio API, so the package ships no audio files. Works on both the web GUI and the Electron desktop app.'
+  zh: 'DSH 声音提醒插件：任务完成 / 需要你回答 / 需要你授权 / 出错四类事件各配一种提示音，一耳朵就能分清。在「设置 → 通用」里用下拉框选模式（开启 / 关闭 / 智能判断，智能模式会让开鲸鱼余额挂件的事件避免两声重叠），逐个事件试听与换音，也可上传自己的音频；对话输入框左下角有小喇叭可临时静音。内置音色全部实时合成，不随包分发音频文件。网页端与桌面端（Electron）均可用。'

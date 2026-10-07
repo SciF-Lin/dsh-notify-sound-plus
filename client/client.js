@@ -7,9 +7,9 @@
  *
  * 职责（严格只做这两件事）：
  *   ① UI：在「通用设置」放一行声音设置；在对话输入框左下角放一个喇叭按钮。
- *   ② 出声：轮询 /dsh-notify/state，宿主说该响（sound != 'none'）就播那个声音。
+ *   ② 出声：轮询 /dsh-notify/state，宿主说该提示（sound != 'none'）就播那个声音。
  *
- * 「该不该响」的判定**全在宿主**（见 lib/index.js 的 resolveSound）；这里不做
+ * 「该不该提示」的判定**全在宿主**（见 lib/index.js 的 resolveSound）；这里不做
  * 任何模式/静音/小鲸鱼判断，避免前后端各判一半导致行为不一致。
  */
 window.__ModuleLoader__.load({
@@ -79,10 +79,7 @@ window.__ModuleLoader__.load({
       '.dshns-row{border-bottom:.5px solid var(--dsw-alias-border-l2);padding:16px 0;display:flex;flex-direction:column;gap:12px}',
       '.dshns-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dshns-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;flex:1;min-width:120px}',
-      '.dshns-seg{display:inline-flex;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);overflow:hidden}',
-      '.dshns-seg>button{border:none;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;padding:6px 12px;cursor:pointer}',
-      '.dshns-seg>button:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-      '.dshns-seg>button[data-active="1"]{background:var(--dsw-alias-brand-primary);color:#fff}',
+      '.dshns-mode{flex:none;width:112px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;height:30px;padding:0 8px;cursor:pointer}',
       '.dshns-btn{border:none;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;padding:6px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}',
       '.dshns-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dshns-btn:disabled{opacity:.5;cursor:default}',
@@ -189,7 +186,7 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 「看着屏幕时不响」只能由页面判断：只有页面知道窗口是否可见且有焦点。
+       * 「应用在前台运行时不提示」只能由页面判断：只有页面知道窗口是否可见且有焦点。
        * 宿主那一层已经判完静音/模式/小鲸鱼，这一层只补这一个条件。
        */
       function focusedNow() {
@@ -238,7 +235,7 @@ window.__ModuleLoader__.load({
             ctxBlocked = false
             var s = pendingSound
             pendingSound = null
-            // 补播是用户手势触发的，此时不该再被「看着屏幕时不响」挡掉
+            // 补播是用户手势触发的，此时不该再被「应用在前台运行时不提示」挡掉
             if (s) play(s, { force: true })
           }
         } catch (err) {}
@@ -356,14 +353,14 @@ window.__ModuleLoader__.load({
             set({ settings: mergeSettings(state.settings, { mode: st.mode }) })
           }
           if (!state.primed) {
-            // 首次只对齐水位：刷新页面不该把旧通知再响一遍
+            // 首次只对齐水位：刷新页面不该把旧通知再提示一遍
             state.primed = true
             state.lastSeq = seq
             return
           }
           if (seq <= state.lastSeq) return
           state.lastSeq = seq
-          // 宿主已经把「该不该响」判好了，这里只认 sound
+          // 宿主已经把「该不该提示」判好了，这里只认 sound
           if (st.sound && st.sound !== 'none') play(st.sound)
         }).then(null, function () {})
       }
@@ -494,7 +491,12 @@ window.__ModuleLoader__.load({
         return h('select', {
           className: 'dshns-select',
           value: value,
-          onChange: function (e) { setEvent(kind, { sound: e.target.value }) },
+          onChange: function (e) {
+            var next = e.target.value
+            setEvent(kind, { sound: next })
+            // 换完立刻试听，不用再去点「▶试听」确认选对了
+            rt.play(next, { force: true })
+          },
           disabled: settings.mode === 'off',
         }, kids)
       }
@@ -517,7 +519,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: '试听',
             onClick: function () { rt.play(ev.sound, { force: true }) },
-          }, '试听'),
+          }, '▶试听'),
         )
       }
 
@@ -537,33 +539,36 @@ window.__ModuleLoader__.load({
         ))
       }
 
+      var MODE_OPTIONS = [
+        { id: 'on', label: '开启声音提示', hint: '所有事件都会发出声音提示' },
+        { id: 'off', label: '关闭声音提示', hint: '所有事件都不发出声音提示' },
+        { id: 'smart', label: '智能判断', hint: '小鲸鱼挂件已经提示的事件不重复提示（它没开的事件仍由本插件提示）' },
+      ]
+      var modeHint = ''
+      for (var mi = 0; mi < MODE_OPTIONS.length; mi++) {
+        if (MODE_OPTIONS[mi].id === settings.mode) modeHint = MODE_OPTIONS[mi].hint
+      }
+
       return h('div', { className: 'dshns-row' },
         h('div', { className: 'dshns-head' },
           h('div', { className: 'dshns-title' }, '声音提醒'),
-          h('div', { className: 'dshns-seg' },
-            ['on', 'off', 'smart'].map(function (m) {
-              var label = m === 'on' ? '开' : m === 'off' ? '关' : '智能'
-              return h('button', {
-                key: m,
-                type: 'button',
-                'data-active': settings.mode === m ? '1' : '0',
-                title: m === 'smart' ? '小鲸鱼没开这个事件的音时才响' : (m === 'on' ? '总是响' : '都不响'),
-                onClick: function () { setMode(m) },
-              }, label)
-            }),
-          ),
+          h('select', {
+            className: 'dshns-mode',
+            value: settings.mode,
+            title: modeHint,
+            onChange: function (e) { setMode(e.target.value) },
+          }, MODE_OPTIONS.map(function (m) {
+            return h('option', { key: m.id, value: m.id }, m.label)
+          })),
           h('button', {
             className: 'dshns-btn',
             type: 'button',
+            title: '试听',
             onClick: function () { rt.play(settings.events.done.sound, { force: true }) },
-          }, '试听'),
+          }, '▶试听'),
         ),
 
-        h('div', { className: 'dshns-hint' },
-          settings.mode === 'smart'
-            ? '智能：由小鲸鱼挂件负责的事件就不重复响（它没开的事件仍由本插件响）。'
-            : '可分别为每个事件选声音；「静音」表示该事件不出声。',
-        ),
+        h('div', { className: 'dshns-hint' }, modeHint),
 
         h('div', { className: 'dshns-events' }, EVENT_META.map(eventLine)),
 
@@ -581,7 +586,7 @@ window.__ModuleLoader__.load({
               checked: !!settings.muteWhenFocused,
               onChange: function (e) { rt.saveSettings({ muteWhenFocused: e.target.checked }) },
             }),
-            h('span', null, '看着屏幕时不响'),
+            h('span', null, '应用在前台运行时不提示'),
           ),
         ),
 
@@ -640,7 +645,7 @@ window.__ModuleLoader__.load({
           stroke: 'currentColor', strokeWidth: 1.8, fill: 'none', strokeLinecap: 'round',
         }))
       }
-      var label = muted ? '提示音已临时关闭（点一下恢复）' : '提示音开着（点一下临时关闭）'
+      var label = muted ? '已关闭提示音' : '已开启提示音'
       return h('button', {
         className: 'dshns-mute',
         type: 'button',

@@ -302,6 +302,174 @@ test('组件能渲染出真实控件（设置行有事件选择、喇叭按钮�
   }
 })
 
+test('设置行：模式改为下拉选择，且带三项标签', () => {
+  const env = setupRow()
+  const tree = env.row({})
+  const mode = find(tree, (n) => n.props && n.props.className === 'dshns-mode')
+  assert.ok(mode, '应渲染模式下拉（select.dshns-mode）')
+  assert.equal(mode.type, 'select', '模式必须用下拉而不是按钮组')
+  const labels = mode.children.map((o) => o.children.join(''))
+  assert.deepEqual(labels, ['开启声音提示', '关闭声音提示', '智能判断'])
+  // 旧的按钮组必须已经不存在
+  assert.equal(find(tree, (n) => n.props && n.props.className === 'dshns-seg'), null,
+    '按钮组 .dshns-seg 应该已被删除')
+})
+
+test('设置行：模式下拉 onChange 会保存所选模式', () => {
+  const env = setupRow()
+  let saved = null
+  env.rt.saveSettings = (patch) => { saved = patch; return Promise.resolve() }
+  const tree = env.row({})
+  const mode = find(tree, (n) => n.props && n.props.className === 'dshns-mode')
+  mode.props.onChange({ target: { value: 'smart' } })
+  // 注意：patch 对象在 vm 的 realm 里创建，deepStrictEqual 会因为原型不同而失败，
+  // 所以逐字段断言。
+  assert.ok(saved, 'onChange 应当调用 saveSettings')
+  assert.equal(saved.mode, 'smart')
+})
+
+test('设置行：试听按钮文本是「▶试听」', () => {
+  const env = setupRow()
+  const tree = env.row({})
+  // 只挑"试听"按钮（上传音频也是 .dshns-btn，但不是试听）
+  const btns = findAll(tree, (n) => n.props && n.props.className === 'dshns-btn' && n.props.title === '试听')
+  assert.equal(btns.length, 5, '四个事件行各一个 + 顶部一个，实际: ' + btns.length)
+  for (const b of btns) {
+    assert.equal(b.children.join(''), '▶试听', '试听按钮文本应带三角符号')
+  }
+})
+
+test('设置行：换声音后自动试听（不用再点按钮）', () => {
+  const env = setupRow()
+  const played = []
+  env.rt.play = (id) => { played.push(id) }
+  const tree = env.row({})
+  const selects = findAll(tree, (n) => n.props && n.props.className === 'dshns-select')
+  assert.equal(selects.length, 4, '四个事件各一个声音下拉')
+  selects[0].props.onChange({ target: { value: 'preset:bell' } })
+  assert.equal(played.length, 1, '换完声音应当立刻试听')
+  assert.equal(played[0], 'preset:bell', '试听的应是刚选中的那个')
+})
+
+test('设置行：「应用在前台运行时不提示」文案正确且可切换', () => {
+  const env = setupRow()
+  let saved = null
+  env.rt.saveSettings = (patch) => { saved = patch; return Promise.resolve() }
+  const tree = env.row({})
+  const texts = collectText(tree)
+  assert.ok(texts.indexOf('应用在前台运行时不提示') >= 0,
+    '应出现新文案，实际文本: ' + JSON.stringify(texts))
+  assert.equal(texts.indexOf('看着屏幕时不响'), -1, '旧文案不该残留')
+
+  // 该文案旁边的复选框（音量行里最后一个 checkbox）
+  const boxes = findAll(tree, (n) => n.type === 'input' && n.props && n.props.type === 'checkbox')
+  const focusBox = boxes[boxes.length - 1]
+  focusBox.props.onChange({ target: { checked: true } })
+  assert.ok(saved, 'onChange 应当调用 saveSettings')
+  assert.equal(saved.muteWhenFocused, true)
+})
+
+test('喇叭按钮：提示文案为「已开启/已关闭提示音」，不含括号', () => {
+  const env = makeEnv()
+  const mod = env.load()
+  let MuteButton = null
+  mod.apply({
+    effect() { return () => {} },
+    slots: {
+      inject(s, r) { r() },
+      register(m, c) { if (m.name === 'conversation.input.left') MuteButton = c; return () => {} },
+    },
+  })
+  const rt = env.win.__DSH_NOTIFY__.runtime
+
+  rt.set({ muted: false })
+  let btn = MuteButton({})
+  assert.equal(btn.props['aria-label'], '已开启提示音')
+  assert.equal(btn.props.title, '已开启提示音')
+
+  rt.set({ muted: true })
+  btn = MuteButton({})
+  assert.equal(btn.props['aria-label'], '已关闭提示音')
+  assert.equal(btn.props.title, '已关闭提示音')
+  for (const t of [btn.props.title, btn.props['aria-label']]) {
+    assert.ok(t.indexOf('（') < 0 && t.indexOf('(') < 0, '不应含括号: ' + t)
+  }
+})
+
+// —— 上面几个测试共用的小工具 —
+
+/** 起一个插件实例，返回已就绪的 runtime 与设置行组件。 */
+function setupRow() {
+  const env = makeEnv()
+  const mod = env.load()
+  let row = null
+  mod.apply({
+    effect() { return () => {} },
+    slots: {
+      inject(s, r) { r() },
+      register(m, c) { if (m.name === 'settings.general.item') row = c; return () => {} },
+    },
+  })
+  const rt = env.win.__DSH_NOTIFY__.runtime
+  rt.set({
+    ready: true,
+    settings: {
+      mode: 'on',
+      volume: 0.6,
+      muteWhenFocused: false,
+      events: {
+        done: { on: true, sound: 'default:done' },
+        question: { on: true, sound: 'default:question' },
+        approval: { on: true, sound: 'default:approval' },
+        error: { on: true, sound: 'default:error' },
+      },
+    },
+    sounds: {
+      builtin: [
+        { id: 'default:done', name: 'D' },
+        { id: 'default:question', name: 'Q' },
+        { id: 'default:approval', name: 'A' },
+        { id: 'default:error', name: 'E' },
+        { id: 'preset:bell', name: '铃音' },
+      ],
+      custom: [],
+    },
+  })
+  return { env, rt, row }
+}
+
+/** 在元素树里找第一个满足条件的节点。 */
+function find(node, pred) {
+  if (!node || typeof node !== 'object') return null
+  if (Array.isArray(node)) {
+    for (const c of node) { const hit = find(c, pred); if (hit) return hit }
+    return null
+  }
+  if (pred(node)) return node
+  for (const c of node.children || []) { const hit = find(c, pred); if (hit) return hit }
+  return null
+}
+
+/** 找出所有满足条件的节点。 */
+function findAll(node, pred, out) {
+  out = out || []
+  if (!node || typeof node !== 'object') return out
+  if (Array.isArray(node)) { for (const c of node) findAll(c, pred, out); return out }
+  if (pred(node)) out.push(node)
+  for (const c of node.children || []) findAll(c, pred, out)
+  return out
+}
+
+/** 收集树里所有纯字符串文本。 */
+function collectText(node, out) {
+  out = out || []
+  if (typeof node === 'string') { out.push(node); return out }
+  if (!node || typeof node !== 'object') return out
+  if (Array.isArray(node)) { for (const c of node) collectText(c, out); return out }
+  for (const c of node.children || []) collectText(c, out)
+  return out
+}
+
 test('apply 是幂等的：重复调用不会叠加样式或残留旧实例', () => {
   const env = makeEnv()
   const mod = env.load()
