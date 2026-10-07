@@ -1,3 +1,5 @@
+**简体中文** | [English](README.en.md)
+
 # dsh-notify-sound-plus
 
 一款类官方风格的系统通知提示插件，它能给 DeepSeek Harness 加一套**提醒**。
@@ -43,12 +45,23 @@
 
 ### 1. 安装
 
-```powershell
-# 网页版
-dsh plugin --profile web add dsh-notify-sound-plus
+三种方式任选，**推荐第一种**（直接从 GitHub 安装，不需要等上架 npm）：
 
-# 桌面端
-dsh plugin --profile desktop add dsh-notify-sound-plus
+```powershell
+# ① 从 GitHub 仓库直接安装（推荐）
+dsh plugin --profile web add github:SciF-Lin/dsh-notify-sound-plus
+
+# ② 用 Releases 里的安装包
+dsh plugin --profile web add https://github.com/SciF-Lin/dsh-notify-sound-plus/releases/download/v2.0.0/dsh-notify-sound-plus-2.0.0.tgz
+
+# ③ 从 npm 安装
+dsh plugin --profile web add dsh-notify-sound-plus
+```
+
+桌面端把 `--profile web` 换成 `--profile desktop` 即可：
+
+```powershell
+dsh plugin --profile desktop add github:SciF-Lin/dsh-notify-sound-plus
 ```
 
 **其他方法**：复制上述地址喂给ai，让ai帮忙安装
