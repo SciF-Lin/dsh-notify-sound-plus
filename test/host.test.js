@@ -517,22 +517,23 @@ test('非 smart 模式下小鲸鱼的开关不影响我们', async () => {
 
 // ============================================================ 系统通知判定
 
-test('系统通知：默认只对「需要你处理」的两类开启', async () => {
+test('系统通知：总开关打开后，需要回答 / 授权 / 任务完成 都会弹；error 不弹', async () => {
+  // 界面上只剩一个总开关，所以这组默认值决定了「打开后到底哪些事件会弹」
   const h = boot()
   await setSettings(h.routes, { system: { enabled: true } })
   const s = session('s1')
 
   h.emit('session/event', s, ev('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'ask_user_question', arguments: '{}' }))
-  assert.equal((await stateOf(h.routes)).json.notify, true, 'question 默认开')
+  assert.equal((await stateOf(h.routes)).json.notify, true, 'question 弹')
 
   h.emit('session/event', s, ev('approval/asked', { id: 'a1' }))
-  assert.equal((await stateOf(h.routes)).json.notify, true, 'approval 默认开')
+  assert.equal((await stateOf(h.routes)).json.notify, true, 'approval 弹')
 
   h.emit('session/event', s, ev('turn/end', { turn: 2, reason: { kind: 'completed' } }))
-  assert.equal((await stateOf(h.routes)).json.notify, false, 'done 默认关（纯播报，不打扰）')
+  assert.equal((await stateOf(h.routes)).json.notify, true, '任务完成弹')
 
   h.emit('session/event', s, ev('turn/end', { turn: 3, reason: { kind: 'error', error: { message: 'x', code: 'y' } } }))
-  assert.equal((await stateOf(h.routes)).json.notify, false, 'error 默认关')
+  assert.equal((await stateOf(h.routes)).json.notify, false, 'error 不弹（避免噪音）')
 })
 
 test('系统通知：总开关关闭时一律不弹（但通知本身照常产生）', async () => {

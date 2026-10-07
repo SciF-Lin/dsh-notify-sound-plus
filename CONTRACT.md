@@ -93,21 +93,74 @@ ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
 
 ### 3.3 独立设置弹窗（点齿轮）
 
-用官方 `Modal` 承载（拿不到就用自绘遮罩 `.dshns-overlay`）。里面分三组：
+**不用官方 primitives 的 `Modal`**：它固定是 380px 窄卡片
+（`.dialog{width:min(380px,100%)}`），而 DSH 里设置类界面用的是宽面板。
+两者宽高比完全不同，塞进去既不像官方、内容也会被压扁。
+
+改为自绘 overlay + sheet，但**尺寸与视觉 token 逐条照抄官方设置面板**
+（见 `ui-settings-general` 的 `.overlay` / `.mask` / `.panel`）：
+
+| 元素 | 规格 |
+|---|---|
+| `.dshns-overlay` | `position:fixed; inset:0; z-index:1001; flex 居中; padding: max(24px,var(--dsh-frame-overlay-top,24px)) 24px` |
+| `.dshns-mask` | `inset: var(--dsh-frame-chrome-top,0px) 0 0`；`background: var(--dsw-alias-bg-mask-1)`；`backdrop-filter: var(--dsw-mask-blur)` |
+| `.dshns-sheet` | `width:600px`（官方 800px 的 3/4）；`height:min(800px, 100vh - 2*max(24px,var(--dsh-frame-overlay-top,24px)))`；`max-width:calc(100vw - 48px)`；`border-radius:var(--dsw-radius-panel)`；`background:var(--dsw-alias-bg-layer-2)`；`box-shadow:var(--dsw-elevation-prominent)` |
+
+关闭有**三条路径**，全部由插件自己接管：右上角 X、点遮罩、按 Esc（打开期间挂
+document keydown，卸载即摘）。不走嵌套弹层的内部行为。
+
+内部布局用官方 **Setting-Cell** 模式（与「通用设置」里的行同构）：
+左侧标题(14/22) + 可选说明(12px secondary)，右侧控件，行间 `.5px` 发丝线。
+
+分组：
 
 - **声音提示**：四事件（开关 + 声音下拉 + 播放按钮）、音量、「应用在前台运行时不提示」
-- **系统通知**：总开关 + 四事件开关（系统通知与声音是两条独立通道）
-- **自定义音频**：上传 + 列表
+- **系统通知**：**只有总开关**。打开后哪些事件弹由宿主默认值决定
+  （`done/question/approval` 弹、`error` 不弹）
+- **自定义音频**：上传 + 已上传列表
 
 **模式不放进弹窗**——它已经显示在通用设置那一行，重复一份只会让人怀疑两处不同步。
 
-### 3.4 官方组件用法（已核实）
+### 3.4 控件全部自绘，规格照抄官方（零 primitives 依赖）
+
+⚠️ **血泪教训**：早期版本 `require('@deepseek-ai/dsh-client-ui-primitives')` 后
+按官方组件渲染，拿不到就"降级"。实测在真实宿主里拿不到，于是：
+
+- 齿轮退化成 `⚙` 文字符号（跟官方图标完全不是一回事）
+- 下拉退化成原生 `<select>` —— 弹层是操作系统的蓝色高亮列表，与官方菜单天差地别
+- 开关退化成原生 checkbox
+- 界面上还挂着一句"已降级显示"的提示
+
+现在**唯一 require 的是 `react`**，其余全部自绘，规格逐条对齐官方 CSS：
+
+| 控件 | 对齐来源 | 关键规格 |
+|---|---|---|
+| 图标 | `*OutlineArtwork` 的 path | viewBox `0 0 16 16`、`stroke="currentColor"`、`fill="none"`、`aria-hidden`；笔画 Regular=1 / Medium=1.3 |
+| 下拉卡片 | `Menu.module.css` `.list` | `padding:4px`、`min-width:144px`、`max-width:360px`、`radius-lg`、`--dsw-menu-surface-fill` + `--dsw-menu-backdrop-filter`、`elevation-prominent` |
+| 下拉选项 | `Menu.module.css` `.item` | `min-height:34px`、`padding:6px 8px`、`radius-md`、`13px/20px`、hover `interactive-bg-hover` |
+| 选中标记 | `.selected` + `.check` | **不打底色**，右侧一个 14px 的勾 |
+| 开关 | `Switch.module.css` | 36×20 轨道 / 2px 内边距 / 16px 圆滑块 / 选中 `translateX(16px)`；关=`border-l3`+`switch-thumb`，开=`brand-primary`；用 `role="switch"`+`aria-checked` |
+| 图标按钮 | `Modal.module.css` `.close` | 28×28、`radius-sm`、透明底、`label-secondary` → hover `label-primary` + 浅底 |
+
+图标路径内联在 `client.js` 顶部的 `ICON_PATHS`（settings / play / chevronDown /
+close / check），改宿主版本也不会漂移。
+
+**Esc 分层**：下拉的 Esc 处理挂在 `.dshns-dd` 元素上并 `stopPropagation`，
+所以只收下拉、不关设置弹窗 —— 官方 Menu 也是"只有最上层响应 Esc"的语义。
+
+### 3.5 图标动作按钮（试听 / 设置）
+
+两个按钮**共用同一个 `IconAction` 实现**，避免各长一样：28×28 方形、
+16px 图标槽、`label-secondary` → hover `label-primary` + 浅底、无文字
+（标签只走 `title` / `aria-label`）。
+
+### 3.6 官方组件参考（已核实，但本插件不再依赖）
 
 | 组件 | 关键 props |
 |---|---|
 | `Menu` | `open`(受控) / `anchor` / `items:[{id,label}]` / `selectedId` / `selection:'check'` / `onSelect(id)` / `onClose` / `portal` / `align` |
 | `Button` | `variant:'ghost'\|'outline'\|'primary'\|'toolbar'` / `size:'sm'\|'md'` / `icon` / `title` |
-| `Modal` | `open` / `onClose` / `title` / `closeLabel` |
+| `Modal` | `open` / `onClose` / `title` / `closeLabel`（**本插件不用它**，见 3.3） |
 | `Switch` | `checked` / `onChange(next)` / `disabled` / `label` / `title` |
 | 图标 | `IconSettingsOutlineMedium`（16px，与侧边栏「通用设置」同一个）、`IconPlayOutlineRegular`、`IconChevronDownOutlineRegular` |
 

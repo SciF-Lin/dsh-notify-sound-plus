@@ -163,11 +163,15 @@ try {
 
   Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -Method POST -TimeoutSec 5 `
     -ContentType 'application/json' -Body '{"system":{"enabled":true}}' | Out-Null
+  # 界面上只剩一个总开关，所以「打开后哪些事件会弹」由默认值决定：
+  # question / approval / done 弹，error 不弹
   $onQ = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=question" -Method POST -TimeoutSec 5
   if ($onQ.notify -ne $true) { Bad "打开总开关后 question 的 notify 应为 true，实际 $($onQ.notify)" }
   $onDone = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=done" -Method POST -TimeoutSec 5
-  if ($onDone.notify -ne $false) { Bad "done 的系统通知默认应为关，实际 $($onDone.notify)" }
-  Ok "系统通知按事件生效：question=$($onQ.notify) done=$($onDone.notify)"
+  if ($onDone.notify -ne $true) { Bad "任务完成的系统通知应为开，实际 $($onDone.notify)" }
+  $onErr = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=error" -Method POST -TimeoutSec 5
+  if ($onErr.notify -ne $false) { Bad "error 的系统通知应为关，实际 $($onErr.notify)" }
+  Ok "系统通知按默认生效：question=$($onQ.notify) done=$($onDone.notify) error=$($onErr.notify)"
 
   # 深合并：只改 events 不能把 enabled 抹掉
   Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -Method POST -TimeoutSec 5 `

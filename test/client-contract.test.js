@@ -29,6 +29,7 @@ const PKG = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf
 /** 极简 React：createElement 把 children 放进 props.children；hooks 按下标存状态。 */
 function fakeReact() {
   const slots = []
+  const cleanups = []
   let cursor = 0
   return {
     createElement(type, props, ...children) {
@@ -45,13 +46,25 @@ function fakeReact() {
       const setter = (v) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v }
       return [slots[i], setter]
     },
-    useEffect() { return undefined },
+    // 立即执行 effect（相当于 mount 后跑一次）。不模拟依赖数组与卸载时机，
+    // 但足以验证「Esc 监听有没有挂上」这类副作用。
+    useEffect(fn) {
+      const cleanup = fn()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+      return cleanup
+    },
     useRef(v) {
       const i = cursor++
       if (!(i in slots)) slots[i] = { current: v }
       return slots[i]
     },
     __begin() { cursor = 0 },
+    /** 显式触发所有已登记清理（模拟卸载）。 */
+    __cleanup() {
+      for (const fn of cleanups.splice(0)) {
+        try { fn() } catch (err) {}
+      }
+    },
   }
 }
 
@@ -130,6 +143,20 @@ function makeEnv(opts) {
     document: {
       visibilityState: 'visible',
       hasFocus: () => true,
+      // 极简 document 事件表：Esc 关闭弹窗要靠它验证
+      _listeners: {},
+      addEventListener(n, fn) {
+        const a = (this._listeners[n] = this._listeners[n] || [])
+        a.push(fn)
+      },
+      removeEventListener(n, fn) {
+        const a = this._listeners[n] || []
+        const i = a.indexOf(fn)
+        if (i >= 0) a.splice(i, 1)
+      },
+      dispatch(n, ev) {
+        for (const f of (this._listeners[n] || []).slice()) f(ev)
+      },
       head: { appendChild(node) { styleTags.push(node) } },
       createElement(tag) { return { tagName: tag, textContent: '', setAttribute() {}, remove() {} } },
       querySelector: () => null,
@@ -259,34 +286,30 @@ test('模拟 cordis 的代理守门：没 inject 就取不到 slots', () => {
   assert.equal(good.registrations.length, 2)
 })
 
-test('只请求平台种子表里的模块（react + 官方 primitives）', () => {
+test('只需要 react：不再请求官方 ui-primitives（外观改由内联图标 + 自绘控件保证）', () => {
   const env = makeEnv()
   env.load()
   for (const name of env.requested) {
-    assert.ok(
-      name === 'react' || name === 'react/jsx-runtime' || name === 'react-dom' ||
-      name === '@deepseek-ai/dsh-client-ui-primitives',
-      '请求了非基线模块: ' + name,
-    )
+    assert.equal(name, 'react', '唯一应当请求的模块是 react，实际请求了: ' + name)
   }
   assert.ok(env.requested.indexOf('react') >= 0, '至少要用到 react')
-  assert.ok(env.requested.indexOf('@deepseek-ai/dsh-client-ui-primitives') >= 0,
-    '应当尝试用官方 primitives（Menu/Button/Modal/Switch 等）')
+  assert.equal(env.requested.indexOf('@deepseek-ai/dsh-client-ui-primitives'), -1,
+    '不该再依赖 primitives —— 它在真实宿主里不保证能解析到，会导致齿轮退化成文字符号、下拉退化成原生 select')
 })
 
-test('官方 primitives 缺失时必须降级运行，而不是整块 UI 挂掉', () => {
+test('宿主不给官方组件时，UI 也照常渲染（因为压根不依赖）', () => {
   const env = makeEnv({ noPrimitives: true })
   const mod = env.load()
-  assert.equal(typeof mod.apply, 'function', '缺 primitives 也要能加载')
+  assert.equal(typeof mod.apply, 'function')
   const regs = []
   assert.doesNotThrow(() => {
     mod.apply({
       effect() { return () => {} },
       slots: { inject(s, r) { r() }, register(m, c) { regs.push({ m, c }); return () => {} } },
     })
-  }, '缺 primitives 时 apply 不能抛')
+  })
   for (const { m, c } of regs) {
-    assert.ok(c({}), m.name + ' 降级后仍应渲染出内容')
+    assert.ok(c({}), m.name + ' 应当渲染出内容')
   }
 })
 test('注入了样式，且样式带插件标记（便于清理/排查）', () => {
@@ -340,56 +363,310 @@ test('通用设置行 = 标题 + 模式 + 试听图标 + 齿轮，且不内联�
     '未点齿轮时不该内联渲染设置面板')
 })
 
-test('齿轮用的是与「通用设置」一致的官方图标（Medium 笔画，16px）', () => {
-  const { tree } = setupRow()
-  const icons = findAll(tree, (n) => n.type === 'Icon')
-  // 齿轮按钮内的图标：size 16（通用设置用的就是 Medium/16）
-  const gears = icons.filter((i) => i.props && i.props.size === 16)
-  assert.ok(gears.length >= 1, '齿轮图标应为 16px（与侧边栏「通用设置」一致）')
+test('试听与设置是两个规格完全一致的图标按钮（同 28×28 / 同 16px 图标）', () => {
+  const { env, tree } = setupRow()
+  const btns = findAll(tree, (n) => n.props && n.props.className === 'dshns-iconbtn')
+  assert.equal(btns.length, 2, '通用设置行应恰有两个图标按钮（试听 + 设置），实际 ' + btns.length)
+
+  for (const b of btns) {
+    assert.equal(b.type, 'button', '应是原生 button')
+    const icon = find(b, (n) => n.type === 'svg')
+    assert.ok(icon, '每个按钮都应带一个内联图标')
+    assert.equal(icon.props.width, 16, '图标槽应为 16px')
+    assert.equal(icon.props.height, 16)
+    assert.equal(icon.props.viewBox, '0 0 16 16', '应与官方 artwork 的 viewBox 一致')
+    // 无文字：标签只走 title / aria-label
+    assert.deepEqual(collectText(b), [], '图标按钮不应带文字')
+  }
+
+  // 尺寸契约写在 CSS 里
+  const css = env.styleTags[0].textContent
+  assert.ok(css.indexOf('.dshns-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0') >= 0,
+    '图标按钮应是 28×28 方形且无内边距')
 })
 
-test('齿轮打开独立弹窗（官方 Modal），且面板里不再重复「模式」', () => {
+test('齿轮/播放/箭头/关闭/勾 都是内联的官方 artwork（viewBox 16、currentColor、Medium 1.3px）', () => {
+  const { tree } = setupRow()
+  const svgs = findAll(tree, (n) => n.type === 'svg')
+  assert.ok(svgs.length >= 3, '通用设置行至少应有 模式箭头 + 播放 + 齿轮 三个图标，实际 ' + svgs.length)
+  for (const s of svgs) {
+    assert.equal(s.props.viewBox, '0 0 16 16')
+    assert.equal(s.props.fill, 'none')
+    assert.equal(s.props['aria-hidden'], 'true', '装饰性图标应对读屏隐藏')
+    const paths = findAll(s, (n) => n.type === 'path')
+    assert.ok(paths.length >= 1, '图标至少应有一条 path')
+    for (const p of paths) assert.equal(p.props.stroke, 'currentColor', 'path 用 currentColor 跟随文字色')
+  }
+  // 齿轮必须是官方 Medium 笔画的 2 段 artwork（外齿 + 中心圆）
+  const gear = find(tree, (n) => n.props && n.props.className === 'dshns-iconbtn' && /设置/.test(String(n.props.title || '')))
+  const gearSvg = find(gear, (n) => n.type === 'svg')
+  assert.equal(gearSvg.props.strokeWidth, 1.3, '齿轮应用官方 Medium 笔画 1.3px')
+  assert.equal(findAll(gearSvg, (n) => n.type === 'path').length, 2, '官方齿轮 artwork 是两段 path')
+})
+
+test('齿轮打开独立弹窗，且面板里不再重复「模式」', () => {
   const setup = setupRow()
   const { tree, panel } = openPanel(setup)
 
-  // 外层必须是官方 Modal（独立窗口），不是内联 div
-  const modal = find(tree, (n) => n.type === 'Modal')
-  assert.ok(modal, '设置面板应由官方 Modal 承载（独立弹窗）')
-  assert.equal(modal.props.open, true)
-  assert.equal(typeof modal.props.onClose, 'function', '应当能关闭')
+  // 承载容器：自绘 overlay + sheet（宽高比照抄官方设置面板，见下一条样式断言）
+  const overlay = find(tree, (n) => n.props && n.props.className === 'dshns-overlay')
+  assert.ok(overlay, '应由全屏 overlay 承载（独立弹窗）')
+  const mask = find(tree, (n) => n.props && n.props.className === 'dshns-mask')
+  assert.ok(mask, '应有遮罩层')
+  assert.equal(typeof mask.props.onClick, 'function', '点遮罩应当能关闭')
 
   const texts = collectText(panel)
-  for (const t of ['声音提示', '音量', '前台不提示', '系统通知', '自定义音频']) {
+  for (const t of ['提醒', '音量', '系统通知', '自定义音频']) {
     assert.ok(texts.indexOf(t) >= 0, '设置面板应含「' + t + '」')
   }
   assert.equal(texts.indexOf('模式'), -1, '弹窗里不该再出现「模式」（它已在通用设置行上显示）')
 })
 
-test('设置面板：四个事件都同时出现在声音提示与系统通知两组里', () => {
+test('弹窗尺寸对齐官方设置面板，宽度按要求缩到 3/4（600px）', () => {
+  const env = makeEnv()
+  const mod = env.load()
+  mod.apply({ effect() { return () => {} }, slots: { inject(s, r) { r() }, register() { return () => {} } } })
+  const css = env.styleTags[0].textContent
+  // 逐条对齐官方 ui-settings-general 的 .panel / .overlay / .mask
+  const must = [
+    'width:600px',
+    'height:min(800px,calc(100vh - 2 * max(24px,var(--dsh-frame-overlay-top,24px))))',
+    'max-width:calc(100vw - 48px)',
+    'border-radius:var(--dsw-radius-panel)',
+    'background:var(--dsw-alias-bg-layer-2)',
+    'box-shadow:var(--dsw-elevation-prominent)',
+    'background:var(--dsw-alias-bg-mask-1)',
+    'inset:var(--dsh-frame-chrome-top,0px) 0 0',
+  ]
+  for (const t of must) {
+    assert.ok(css.indexOf(t) >= 0, '样式应含官方设置面板的：' + t)
+  }
+  // 设置行要用官方 Setting-Cell 的排版（标题 14/22、行距 16px 0、发丝线）
+  for (const t of ['padding:16px 0', 'font-size:14px;line-height:22px', 'border-bottom:.5px solid var(--dsw-alias-border-l2)']) {
+    assert.ok(css.indexOf(t) >= 0, '设置行样式应对齐官方 Setting-Cell：' + t)
+  }
+})
+
+test('下拉卡片与选项行逐条对齐官方 Menu.module.css', () => {
+  const env = makeEnv()
+  const mod = env.load()
+  mod.apply({ effect() { return () => {} }, slots: { inject(s, r) { r() }, register() { return () => {} } } })
+  const css = env.styleTags[0].textContent
+  const must = [
+    // 卡片：4px 内边距、radius-lg、prominent 立体阴影、菜单材质底色
+    'padding:4px;min-width:144px;max-width:360px',
+    'border-radius:var(--dsw-radius-lg)',
+    'background:var(--dsw-menu-surface-fill,var(--dsw-alias-bg-overlay))',
+    'backdrop-filter:var(--dsw-menu-backdrop-filter)',
+    '--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)',
+    // 选项行：min-height 34 / padding 6px 8px / radius-md / 13px 文字
+    'min-height:34px;padding:6px 8px',
+    'border-radius:var(--dsw-radius-md)',
+    'font-size:13px;line-height:20px',
+    // hover 填充
+    '.dshns-ddItem:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+    // 选中项不打底色，靠尾部勾标记
+    '.dshns-ddCheck{flex:none;color:var(--dsw-alias-label-primary)}',
+  ]
+  for (const t of must) {
+    assert.ok(css.indexOf(t) >= 0, '下拉样式应对齐官方 Menu：' + t)
+  }
+})
+
+test('开关尺寸与配色逐条对齐官方 Switch.module.css', () => {
+  const env = makeEnv()
+  const mod = env.load()
+  mod.apply({ effect() { return () => {} }, slots: { inject(s, r) { r() }, register() { return () => {} } } })
+  const css = env.styleTags[0].textContent
+  const must = [
+    'width:36px;height:20px;padding:2px;border:0;border-radius:999px',
+    'background:var(--dsw-alias-border-l3)',
+    '.dshns-switch[aria-checked="true"]{background:var(--dsw-alias-brand-primary)}',
+    'width:16px;height:16px;border-radius:50%',
+    'background:var(--dsw-alias-switch-thumb)',
+    '.dshns-switch[aria-checked="true"] .dshns-thumb{transform:translateX(16px)}',
+  ]
+  for (const t of must) {
+    assert.ok(css.indexOf(t) >= 0, '开关样式应对齐官方 Switch：' + t)
+  }
+})
+
+test('弹窗关闭：点右上角 X 能关掉（本次修的 bug）', () => {
+  const setup = setupRow()
+  const { tree } = openPanel(setup)
+
+  const close = find(tree, (n) => n.props && n.props.className === 'dshns-close')
+  assert.ok(close, '应有右上角关闭按钮')
+  assert.equal(typeof close.props.onClick, 'function', '关闭按钮必须有 onClick')
+  assert.equal(close.props['aria-label'], '关闭')
+
+  close.props.onClick()
+  const after = setup.env.mount(setup.row, {})
+  assert.equal(find(after, (n) => n.props && n.props.className === 'dshns-sheet'), null,
+    '点 X 之后弹窗应当消失')
+})
+
+test('弹窗关闭：点遮罩、按 Esc 也能关掉', () => {
+  // 点遮罩
+  const s1 = setupRow()
+  const r1 = openPanel(s1)
+  find(r1.tree, (n) => n.props && n.props.className === 'dshns-mask').props.onClick()
+  assert.equal(find(s1.env.mount(s1.row, {}), (n) => n.props && n.props.className === 'dshns-sheet'), null,
+    '点遮罩应当关闭')
+
+  // Esc
+  const s2 = setupRow()
+  openPanel(s2)
+  s2.env.win.document.dispatch('keydown', { key: 'Escape', shiftKey: false, preventDefault() {} })
+  assert.equal(find(s2.env.mount(s2.row, {}), (n) => n.props && n.props.className === 'dshns-sheet'), null,
+    'Esc 应当关闭')
+})
+
+test('系统通知只保留总开关，不再有逐事件开关', () => {
+  const setup = setupRow({ systemEnabled: true })
+  const { tree, panel } = openPanel(setup)
+
+  const texts = collectText(panel)
+  assert.ok(texts.indexOf('系统通知') >= 0, '应有系统通知分组')
+
+  // 逐事件系统通知开关必须已经不存在
+  const perEvent = findAll(tree, (n) => isSwitch(n) &&
+    /这个事件是否弹系统通知|先打开上面的系统通知总开关/.test(String(n.props.title || '')))
+  assert.equal(perEvent.length, 0, '系统通知不该再有逐事件开关')
+
+  // 总开关仍在
+  const master = toggleByTitle(tree, '通过系统通知提醒')
+  assert.ok(master, '总开关必须保留')
+})
+
+test('面板：开关数量与预期一致（4 个声音 + 前台不提示 + 系统通知总开关）', () => {
+  const setup = setupRow()
+  const { tree } = openPanel(setup)
+  const switches = findAll(tree, isSwitch)
+  assert.equal(switches.length, 6, '四个声音事件 + 前台不提示 + 系统通知总开关，实际 ' + switches.length)
+  for (const sw of switches) {
+    assert.equal(sw.type, 'button', '开关应是原生 button')
+    assert.equal(sw.props['aria-checked'] === 'true' || sw.props['aria-checked'] === 'false', true,
+      '开关必须暴露 aria-checked（与官方 Switch 一样让语义与视觉同源）')
+    assert.ok(find(sw, (n) => n.props && n.props.className === 'dshns-thumb'), '开关应有圆形滑块')
+  }
+})
+
+test('设置面板：四个事件名都出现在声音提示分组里', () => {
   const setup = setupRow()
   const { panel } = openPanel(setup)
   const texts = collectText(panel)
-  for (const label of ['任务完成', '需要我回答', '需要我授权', '出错']) {
-    const n = texts.filter((x) => x === label).length
-    assert.ok(n >= 2, '「' + label + '」应同时出现在两组里，实际 ' + n)
+  for (const label of ['任务完成', '需要回答', '需要授权', '运行出错']) {
+    assert.ok(texts.indexOf(label) >= 0, '提醒分组应含「' + label + '」')
   }
+})
+
+test('设置页底部附 GitHub 仓库地址', () => {
+  const setup = setupRow()
+  const { tree, panel } = openPanel(setup)
+
+  const foot = find(tree, (n) => n.props && n.props.className === 'dshns-sheetFoot')
+  assert.ok(foot, '设置页应有页脚')
+
+  const link = find(foot, (n) => n.type === 'a')
+  assert.ok(link, '页脚应有仓库链接')
+  assert.equal(link.props.href, 'https://github.com/SciF-Lin/dsh-notify-sound-plus')
+  assert.equal(link.props.target, '_blank', '外链应新开标签，避免把 DSH 页面导航走')
+  assert.ok(/noreferrer/.test(String(link.props.rel)))
+  assert.equal(collectText(link).join(''), '欢迎访问GitHub仓库送上star与issue！')
+
+  // 页脚在滚动区之外（常驻可见），且不打乱面板正文
+  assert.ok(collectText(foot).join('|').indexOf('github.com/SciF-Lin/dsh-notify-sound-plus') >= 0,
+    '页脚应显示仓库地址')
+  const body = find(tree, (n) => n.props && n.props.className === 'dshns-sheetBody')
+  assert.equal(collectText(body).join('').indexOf('欢迎访问'), -1, '页脚不该混进滚动正文')
+  assert.ok(collectText(panel).indexOf('提醒') >= 0, '正文仍在')
+})
+
+test('文案口径统一：用「提醒」而非「声音提示」，且不留旧措辞', () => {
+  const env = makeEnv()
+  const mod = env.load()
+  mod.apply({ effect() { return () => {} }, slots: { inject(s, r) { r() }, register() { return () => {} } } })
+  const src = CLIENT_SRC
+
+  // 用户点名的替换
+  assert.equal(src.indexOf('开启声音提示'), -1)
+  assert.equal(src.indexOf('关闭声音提示'), -1)
+  assert.equal(src.indexOf('试听「'), -1, '试听按钮的提示应只剩「试听」')
+  assert.equal(src.indexOf('切到别的应用'), -1)
+  assert.equal(src.indexOf('权限：已授权'), -1, '权限文案应为「已开启」')
+
+  assert.ok(src.indexOf("label: '开启提醒'") >= 0)
+  assert.ok(src.indexOf("label: '关闭提醒'") >= 0)
+  assert.ok(src.indexOf('与小鲸鱼挂件协助提醒（未开启事件由本插件提醒）') >= 0)
+  assert.ok(src.indexOf('仅在后台运行时提醒') >= 0)
+  assert.ok(src.indexOf('需要回答 / 授权 / 任务完成时 系统通知 · 权限：') >= 0)
 })
 
 // ============================================================ 面板交互
 
-test('面板：四个声音下拉，换音后自动试听', () => {
+test('面板：四个声音下拉，展开后是官方样式的卡片，换音后自动试听', () => {
   const setup = setupRow()
   const played = []
   setup.rt.play = (id) => { played.push(id) }
-  const { panel } = openPanel(setup)
+  openPanel(setup)
 
-  const menus = findAll(panel, (n) => n.type === 'Menu')
-  const soundMenus = menus.filter((m) => ((m.props && m.props.items) || []).some((it) => it.id === 'preset:bell'))
-  assert.equal(soundMenus.length, 4, '四个事件各一个声音下拉，实际 ' + soundMenus.length)
+  // 声音下拉 = 不带 dshns-mode 的下拉（模式那个在通用设置行里，带 dshns-mode）
+  const t1 = setup.env.mount(setup.row, {})
+  const soundDds = findAll(t1, (n) => n.props && n.props.className === 'dshns-dd')
+  assert.equal(soundDds.length, 4, '四个事件各一个声音下拉，实际 ' + soundDds.length)
 
-  soundMenus[0].props.onSelect('preset:bell')
+  // 展开第一个：只有展开时才出现卡片
+  const trig = find(soundDds[0], (n) => n.props && n.props.className === 'dshns-ddTrigger')
+  assert.ok(trig, '下拉应有触发器')
+  assert.equal(trig.props['aria-expanded'], 'false')
+  trig.props.onClick()
+
+  const t2 = setup.env.mount(setup.row, {})
+  const cards = findAll(t2, (n) => n.props && n.props.className === 'dshns-ddCard')
+  assert.equal(cards.length, 1, '同一时刻只应展开一个下拉卡片')
+
+  // 卡片里的选项行：选中的那项右侧带勾（官方是「不打底色 + 尾部勾」）
+  const items = findAll(cards[0], (n) => n.props && n.props.className === 'dshns-ddItem')
+  assert.ok(items.length >= 5, '应列出全部内置音色，实际 ' + items.length)
+  const checked = items.filter((it) => find(it, (n) => n.type === 'svg'))
+  assert.equal(checked.length, 1, '应恰好一项带选中勾，实际 ' + checked.length)
+
+  // 点「铃音」→ 写入 + 立刻试听
+  const bell = items.find((it) => collectText(it).join('') === '铃音')
+  assert.ok(bell, '卡片里应有「铃音」这一项')
+  bell.props.onClick()
   assert.equal(played.length, 1, '换完声音应立刻试听一次')
   assert.equal(played[0], 'preset:bell', '试听的应是刚选中的那个')
+})
+
+test('下拉：按 Esc 只收起下拉（不连设置弹窗一起关），点外面也收起', () => {
+  const setup = setupRow()
+  openPanel(setup)
+
+  function openFirstSoundDd() {
+    const t = setup.env.mount(setup.row, {})
+    const dd = findAll(t, (n) => n.props && n.props.className === 'dshns-dd')[0]
+    assert.ok(dd, '应能找到声音下拉')
+    find(dd, (n) => n.props && n.props.className === 'dshns-ddTrigger').props.onClick()
+    const after = setup.env.mount(setup.row, {})
+    assert.equal(findAll(after, (n) => n.props && n.props.className === 'dshns-ddCard').length, 1, '下拉应已展开')
+    return findAll(after, (n) => n.props && n.props.className === 'dshns-dd')[0]
+  }
+
+  // —— Esc：只收下拉 ——
+  let dd = openFirstSoundDd()
+  dd.props.onKeyDown({ key: 'Escape', stopPropagation() {}, preventDefault() {} })
+  let t = setup.env.mount(setup.row, {})
+  assert.equal(findAll(t, (n) => n.props && n.props.className === 'dshns-ddCard').length, 0, 'Esc 应收起下拉')
+  assert.ok(find(t, (n) => n.props && n.props.className === 'dshns-sheet'), 'Esc 不该把设置弹窗一起关掉')
+
+  // —— 点外面 ——
+  dd = openFirstSoundDd()
+  setup.env.win.document.dispatch('mousedown', { target: {} })
+  t = setup.env.mount(setup.row, {})
+  assert.equal(findAll(t, (n) => n.props && n.props.className === 'dshns-ddCard').length, 0, '点外面应收起下拉')
+  assert.ok(find(t, (n) => n.props && n.props.className === 'dshns-sheet'), '点外面也不该关掉设置弹窗')
 })
 
 test('面板：系统通知总开关会申请权限并写入 system.enabled', () => {
@@ -401,10 +678,10 @@ test('面板：系统通知总开关会申请权限并写入 system.enabled', ()
   setup.rt.requestPermission = () => { permCalls.push(1); return Promise.resolve('granted') }
   const { panel } = openPanel(setup)
 
-  const master = toggleByTitle(panel, '在系统通知中心弹出提醒')
+  const master = toggleByTitle(panel, '通过系统通知提醒')
   assert.ok(master, '应能找到系统通知总开关')
 
-  master.props.onChange(true)
+  master.props.onClick()
   const patch = saved.find((p) => p.system && typeof p.system.enabled === 'boolean')
   assert.ok(patch, '总开关应写入 system.enabled')
   assert.equal(patch.system.enabled, true)
@@ -417,35 +694,8 @@ test('面板：权限已授予时不再申请', () => {
   setup.rt.saveSettings = () => Promise.resolve()
   setup.rt.requestPermission = () => { permCalls.push(1); return Promise.resolve('granted') }
   const { panel } = openPanel(setup)
-  toggleByTitle(panel, '在系统通知中心弹出提醒').props.onChange(true)
+  toggleByTitle(panel, '通过系统通知提醒').props.onClick()
   assert.equal(permCalls.length, 0, '已授权时不该再弹权限请求')
-})
-
-test('面板：逐事件系统通知开关写入 system.events', () => {
-  // 总开关要先开着，逐事件开关才是"可切换"的（关闭时它们是禁用状态）
-  const setup = setupRow({ systemEnabled: true })
-  const saved = []
-  setup.rt.saveSettings = (patch) => { saved.push(patch); return Promise.resolve() }
-  const { tree } = openPanel(setup)
-
-  const sysToggles = findAll(tree, (n) => n.type === 'Switch' && n.props && String(n.props.title || '').indexOf('这个事件是否弹系统通知') >= 0)
-  assert.equal(sysToggles.length, 4, '四个事件各一个系统通知开关，实际 ' + sysToggles.length)
-  sysToggles[0].props.onChange(true)
-  const patch = saved.find((p) => p.system && p.system.events)
-  assert.ok(patch, '逐事件开关应写入 system.events')
-  const key = Object.keys(patch.system.events)[0]
-  assert.equal(patch.system.events[key], true)
-  assert.ok(['done', 'question', 'approval', 'error'].indexOf(key) >= 0, '键应是事件名: ' + key)
-})
-
-test('面板：逐事件开关在总开关关闭时禁用', () => {
-  const setup = setupRow()  // 默认 system.enabled = false
-  const { tree } = openPanel(setup)
-  const sysToggles = findAll(tree, (n) => n.type === 'Switch' && n.props && String(n.props.title || '').indexOf('先打开上面的系统通知总开关') >= 0)
-  assert.equal(sysToggles.length, 4, '总开关关闭时四个逐事件开关都应提示先开总开关，实际 ' + sysToggles.length)
-  for (const sw of sysToggles) {
-    assert.equal(sw.props.disabled, true, '总开关关闭时逐事件开关应禁用')
-  }
 })
 
 test('面板：音量与「应用在前台运行时不提示」可写', () => {
@@ -459,14 +709,16 @@ test('面板：音量与「应用在前台运行时不提示」可写', () => {
   range.props.onChange({ target: { value: '0.3' } })
   assert.equal(saved[saved.length - 1].volume, 0.3)
 
-  const focusToggle = toggleByTitle(tree, '应用在前台运行时不出声')
+  const focusToggle = toggleByTitle(tree, '仅在后台运行时提醒')
   assert.ok(focusToggle, '应能找到「应用在前台运行时不提示」开关')
-  focusToggle.props.onChange(true)
+  focusToggle.props.onClick()
   assert.equal(saved[saved.length - 1].muteWhenFocused, true)
 
   const texts = collectText(panel)
-  assert.ok(texts.indexOf('应用在前台运行时不提示') >= 0, '应出现「应用在前台运行时不提示」')
-  assert.equal(texts.indexOf('看着屏幕时不响'), -1, '旧文案不该残留')
+  assert.ok(texts.indexOf('前台运行时不提醒') >= 0, '应出现「前台运行时不提醒」')
+  assert.equal(texts.indexOf('切到别的应用'), -1, '旧文案不该残留')
+  assert.equal(texts.join('').indexOf('不看 DSH'), -1, '旧文案不该残留')
+  assert.equal(texts.join('').indexOf('已降级显示'), -1, '不该再出现「界面已降级显示」提示')
 })
 
 // ============================================================ 系统通知
@@ -515,7 +767,7 @@ test('系统通知：四类事件各有自己的标题', () => {
     rt.notifySystem(kind, false)
   }
   const titles = env.notifications.map((n) => n.title)
-  assert.deepEqual(titles, ['任务完成', '需要你回答', '需要你授权', '出错了'])
+  assert.deepEqual(titles, ['任务完成', '需要你回答', '需要你授权', '运行出错'])
   assert.equal(new Set(titles).size, 4, '四个标题应互不相同')
 })
 
@@ -637,10 +889,14 @@ function openPanel(setup) {
   return { tree, panel }
 }
 
+/** 是不是一个开关（自绘的官方样式 Switch：button[role=switch]）。 */
+function isSwitch(n) {
+  return n && n.type === 'button' && n.props && n.props.role === 'switch'
+}
+
 /** 按 title 找一个开关（比按下标稳：将来加行不会让测试错位）。 */
 function toggleByTitle(tree, title) {
-  const sw = findAll(tree, (n) => n.type === 'Switch' && n.props && String(n.props.title || '').indexOf(title) >= 0)
-  return sw[0]
+  return findAll(tree, (n) => isSwitch(n) && String(n.props.title || '').indexOf(title) >= 0)[0]
 }
 
 /** 在宿主元素树里找第一个满足条件的节点。 */

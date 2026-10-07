@@ -29,21 +29,69 @@ window.__ModuleLoader__.load({
     var ROUTE = '/dsh-notify'
     var POLL_MS = 900
     var PLUGIN_ID = 'dsh-notify-sound-plus'
+    var REPO_URL = 'https://github.com/SciF-Lin/dsh-notify-sound-plus'
 
-    // ======================================================= 官方组件（可选依赖）
-    // 官方 ui-primitives 提供 Menu / Button / Modal / Switch 等原子组件。
-    // 它应当在平台种子表里，但**不能假设一定在**：拿不到就整体降级成自绘控件，
-    // 绝不能因为缺一个组件就让设置行白掉。
-    var P = null
-    try { P = require('@deepseek-ai/dsh-client-ui-primitives') } catch (err) { P = null }
-    function prim(name) {
-      return P && typeof P[name] === 'function' ? P[name] : null
+    // ============================================== 官方图标（路径内联，零依赖）
+    // 为什么内联而不是 require 官方 ui-primitives 的图标组件：
+    // 一是 primitives 在真实宿主里并不总能解析到（拿不到就只能画个文字符号，
+    // 齿轮变成 ⚙ 字形，和官方完全不是一回事）；二是即便拿得到，图标组件的
+    // 解析结果也会随宿主版本漂移。直接内联官方 artwork 的 path，任何宿主、
+    // 任何版本画出来都完全一致。
+    //
+    // 数据来源：@deepseek-ai/dsh-client-ui-primitives 的 *OutlineArtwork
+    //   · viewBox 一律 "0 0 16 16"，path 只带 stroke="currentColor"
+    //   · 笔画宽度：Regular = 1，Medium = ICON_MEDIUM_STROKE = 1.3
+    var ICON_PATHS = {
+      // IconSettingsOutlineArtwork（齿轮；Medium 1.3px，与侧边栏「通用设置」同一个）
+      settings: [
+        { d: 'M8 9.75012C8.9665 9.75012 9.75 8.96662 9.75 8.00012C9.75 7.03362 8.9665 6.25012 8 6.25012C7.0335 6.25012 6.25 7.03362 6.25 8.00012C6.25 8.96662 7.0335 9.75012 8 9.75012Z' },
+        { d: 'M13.0107 7.79377C12.9505 7.89401 12.9205 7.94413 12.9205 7.99951C12.9205 8.0549 12.9505 8.10502 13.0106 8.20528L13.9849 9.83006C14.045 9.93029 14.0751 9.9804 14.0751 10.0358C14.0751 10.0911 14.045 10.1413 13.9849 10.2415L13.0037 11.8777C12.9468 11.9726 12.9184 12.0201 12.8725 12.0461C12.8267 12.072 12.7713 12.072 12.6607 12.072H10.6704C10.5598 12.072 10.5045 12.072 10.4586 12.098C10.4128 12.1239 10.3843 12.1714 10.3274 12.2662L9.33825 13.9142C9.28133 14.009 9.25287 14.0564 9.20703 14.0823C9.16118 14.1083 9.10588 14.1083 8.99529 14.1083H7.00486C6.89426 14.1083 6.83896 14.1083 6.79312 14.0823C6.74727 14.0564 6.71881 14.009 6.6619 13.9142L5.67273 12.2662C5.61581 12.1714 5.58735 12.1239 5.54151 12.098C5.49566 12.072 5.44036 12.072 5.32977 12.072H3.33945C3.2288 12.072 3.17347 12.072 3.12761 12.0461C3.08176 12.0201 3.0533 11.9726 2.9964 11.8777L2.0152 10.2415C1.9551 10.1413 1.92505 10.0911 1.92505 10.0358C1.92505 9.9804 1.9551 9.93029 2.0152 9.83006L2.98951 8.20528C3.04963 8.10502 3.07969 8.0549 3.07969 7.99951C3.07968 7.94413 3.04961 7.89401 2.98946 7.79377L2.01529 6.17011C1.95514 6.06987 1.92507 6.01975 1.92507 5.96437C1.92506 5.90899 1.95512 5.85886 2.01524 5.7586L2.9964 4.1224C3.0533 4.0275 3.08176 3.98005 3.12761 3.95408C3.17347 3.92811 3.2288 3.92811 3.33945 3.92811H5.32977C5.44036 3.92811 5.49566 3.92811 5.54151 3.90216C5.58735 3.87621 5.61581 3.82879 5.67273 3.73397L6.6619 2.08599C6.71881 1.99116 6.74727 1.94375 6.79312 1.9178C6.83896 1.89185 6.89426 1.89185 7.00486 1.89185H8.99529C9.10588 1.89185 9.16118 1.89185 9.20703 1.9178C9.25287 1.94375 9.28133 1.99116 9.33825 2.08599L10.3274 3.73397C10.3843 3.82879 10.4128 3.87621 10.4586 3.90216C10.5045 3.92811 10.5598 3.92811 10.6704 3.92811H12.6607C12.7713 3.92811 12.8267 3.92811 12.8725 3.95408C12.9184 3.98005 12.9468 4.0275 13.0037 4.1224L13.9849 5.7586C14.045 5.85886 14.0751 5.90899 14.0751 5.96437C14.0751 6.01975 14.045 6.06987 13.9849 6.17011L13.0107 7.79377Z', miterlimit: 10 },
+      ],
+      // IconPlayOutlineArtwork（试听）
+      play: [
+        { d: 'M8 14.5C11.5899 14.5 14.5 11.5899 14.5 8C14.5 4.41015 11.5899 1.5 8 1.5C4.41015 1.5 1.5 4.41015 1.5 8C1.5 11.5899 4.41015 14.5 8 14.5Z' },
+        { d: 'M10.3329 7.91346C10.3996 7.95195 10.3996 8.04818 10.3329 8.08667L6.78304 10.1362C6.71638 10.1747 6.63304 10.1266 6.63304 10.0496L6.63304 5.95055C6.63304 5.87357 6.71638 5.82546 6.78304 5.86395L10.3329 7.91346Z' },
+      ],
+      // IconChevronDownOutlineArtwork（下拉箭头）
+      chevronDown: [
+        { d: 'M4 6L7.29289 9.29289C7.68342 9.68342 8.31658 9.68342 8.70711 9.29289L12 6' },
+      ],
+      // IconCloseOutlineArtwork（关闭）
+      close: [
+        { d: 'M2.5 2.5L13.5 13.5' },
+        { d: 'M13.5 2.5L2.5 13.5' },
+      ],
+      // IconCheckOutlineArtwork（下拉里选中项右侧的勾）
+      check: [
+        { d: 'M2.25 8.5L5.49732 11.7473C5.90519 12.1552 6.57263 12.1344 6.95426 11.7018L13.75 4' },
+      ],
     }
-    var hasPrimitives = !!(P && prim('Menu') && prim('Button'))
-    if (!hasPrimitives) {
-      try {
-        console.warn('[dsh-notify-sound-plus] 官方 ui-primitives 不可用，已降级为内置控件')
-      } catch (err) {}
+    var ICON_MEDIUM_STROKE = 1.3
+
+    /** 渲染一个官方轮廓图标。size 默认 16（官方 artwork 的原生尺寸）。 */
+    function SvgIcon(props) {
+      var paths = ICON_PATHS[props.name] || []
+      var size = props.size || 16
+      var kids = []
+      for (var i = 0; i < paths.length; i++) {
+        kids.push(h('path', {
+          key: i,
+          d: paths[i].d,
+          stroke: 'currentColor',
+          strokeMiterlimit: paths[i].miterlimit,
+        }))
+      }
+      return h('svg', {
+        className: props.className,
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        focusable: 'false',
+        strokeWidth: props.strokeWidth || ICON_MEDIUM_STROKE,
+      }, kids)
     }
 
     // ============================================================ 合成音色表
@@ -90,9 +138,9 @@ window.__ModuleLoader__.load({
 
     var EVENT_META = [
       { kind: 'done', label: '任务完成' },
-      { kind: 'question', label: '需要我回答' },
-      { kind: 'approval', label: '需要我授权' },
-      { kind: 'error', label: '出错' },
+      { kind: 'question', label: '需要回答' },
+      { kind: 'approval', label: '需要授权' },
+      { kind: 'error', label: '运行出错' },
     ]
 
     // ================================================================ 样式
@@ -100,17 +148,35 @@ window.__ModuleLoader__.load({
       '.dshns-row{border-bottom:.5px solid var(--dsw-alias-border-l2);padding:16px 0;display:flex;flex-direction:column;gap:10px}',
       '.dshns-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dshns-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;flex:1;min-width:120px}',
-      '.dshns-menuAnchor{display:inline-flex;align-items:center;flex:none}',
-      '.dshns-row .dshns-menuTrigger{min-width:112px;justify-content:space-between}',
-      '.dshns-iconbtn{flex:none}',
-      '.dshns-tri{font-size:11px;line-height:1}',
-      '.dshns-mode{flex:none;width:112px;height:30px}',
+      '.dshns-mode{flex:none}',
       '.dshns-btn{border:none;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;padding:6px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}',
       '.dshns-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dshns-btn:disabled{opacity:.5;cursor:default}',
-      '.dshns-select{min-width:100px;max-width:260px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);border:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;height:30px;padding:0 8px;cursor:pointer}',
+      // —— 下拉：外观逐条对齐官方 Menu.module.css ——
+      '.dshns-dd{position:relative;display:inline-flex;flex:none}',
+      '.dshns-ddTrigger{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;min-width:112px;height:28px;padding:0 6px 0 10px;border:none;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer}',
+      '.dshns-ddTrigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshns-ddTrigger:disabled{opacity:.4;cursor:not-allowed}',
+      '.dshns-ddLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}',
+      '.dshns-ddCard{box-sizing:border-box;position:absolute;top:calc(100% + 4px);right:0;z-index:100;display:flex;flex-direction:column;padding:4px;min-width:144px;max-width:360px;border-radius:var(--dsw-radius-lg);background:var(--dsw-menu-surface-fill,var(--dsw-alias-bg-overlay));backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-prominent);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)}',
+      '.dshns-ddItem{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;padding:6px 8px;border:none;border-radius:var(--dsw-radius-md);background:transparent;cursor:pointer;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left}',
+      '.dshns-ddItem:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshns-ddItemLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dshns-ddCheck{flex:none;color:var(--dsw-alias-label-primary)}',
+      // —— 开关：尺寸与配色照抄官方 Switch.module.css ——
+      '.dshns-switch{box-sizing:border-box;position:relative;flex:0 0 auto;width:36px;height:20px;padding:2px;border:0;border-radius:999px;background:var(--dsw-alias-border-l3);cursor:pointer}',
+      '.dshns-switch[aria-checked="true"]{background:var(--dsw-alias-brand-primary)}',
+      '.dshns-switch:disabled{cursor:default;opacity:.5}',
+      '.dshns-switch:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}',
+      '.dshns-thumb{display:block;width:16px;height:16px;border-radius:50%;background:var(--dsw-alias-label-primary-foreground);transition:transform 120ms ease}',
+      '.dshns-switch[aria-checked="false"] .dshns-thumb{background:var(--dsw-alias-switch-thumb)}',
+      '.dshns-switch[aria-checked="true"] .dshns-thumb{transform:translateX(16px)}',
       '.dshns-chk{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;flex:none}',
       '.dshns-hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
+      // 图标动作按钮（播放 / 齿轮）：28×28 方形，安静色，hover 转主色 + 浅底
+      '.dshns-iconbtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;flex:none;border:none;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+      '.dshns-iconbtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+      '.dshns-iconbtn:disabled{opacity:.4;cursor:not-allowed}',
       '.dshns-vol{display:flex;align-items:center;gap:10px}',
       '.dshns-vol>input{flex:1;max-width:240px}',
       '.dshns-range{flex:1;max-width:200px}',
@@ -120,20 +186,37 @@ window.__ModuleLoader__.load({
       '.dshns-customname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}',
       '.dshns-x{border:none;background:transparent;color:var(--dsw-alias-state-error-primary);font:inherit;font-size:12px;cursor:pointer;padding:2px 6px}',
       '.dshns-msg{font-size:12px;color:var(--dsw-alias-state-warn-primary)}',
-      // 独立设置界面（官方 Modal 内的内容；降级时是自绘 sheet）
-      '.dshns-panel{display:flex;flex-direction:column;gap:8px;min-width:340px;max-width:520px}',
-      '.dshns-pSection{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;letter-spacing:.02em;margin-top:6px;padding-bottom:2px;border-bottom:.5px solid var(--dsw-alias-border-l2)}',
-      '.dshns-pRows{display:flex;flex-direction:column}',
-      '.dshns-pRow{display:flex;align-items:center;gap:12px;min-height:38px}',
-      '.dshns-pLabel{color:var(--dsw-alias-label-primary);font-size:13px;width:82px;flex:none}',
-      '.dshns-pCtl{display:flex;align-items:center;gap:8px;flex:1;min-width:0;justify-content:flex-end}',
-      '.dshns-pHint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
-      '.dshns-pHintInline{color:var(--dsw-alias-label-secondary);font-size:12px;flex:none}',
-      '.dshns-overlay{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:24px}',
-      '.dshns-sheet{background:var(--dsw-alias-bg-overlay);border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.24)}',
-      '.dshns-sheetHead{display:flex;align-items:center;gap:12px;padding:16px 20px 8px}',
-      '.dshns-sheetTitle{flex:1;color:var(--dsw-alias-label-primary);font-size:15px;font-weight:500}',
-      '.dshns-sheetBody{padding:8px 20px 20px;overflow:auto}',
+      // 独立设置界面：尺寸与样式**逐条对齐官方设置面板**
+      // （见 ui-settings-general 的 .panel / .overlay / .mask：
+      //   overlay fixed inset 0 + z-index 1000 + 居中 + 24px 边距；
+      //   panel 800×800（高度随视口收缩）、radius-panel、bg-layer-2、elevation-prominent）
+      '.dshns-panel{display:flex;flex-direction:column;gap:0;width:100%}',
+      // 分组标题：与官方设置页一致的弱化小标题
+      '.dshns-pSection{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600;letter-spacing:.02em;margin:18px 0 2px}',
+      '.dshns-pSection:first-child{margin-top:2px}',
+      '.dshns-pGroup{display:flex;flex-direction:column}',
+      // Setting-Cell：左标题(+说明) / 右控件 / 行间发丝线
+      // （尺寸照抄官方 ui-settings-general 与 locale 的 LanguageRow）
+      '.dshns-srow{display:flex;align-items:center;gap:8px;padding:16px 0;border-bottom:.5px solid var(--dsw-alias-border-l2)}',
+      '.dshns-srow:last-child{border-bottom:none}',
+      '.dshns-srowText{display:flex;flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px}',
+      '.dshns-srowTitle{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-weight:400}',
+      '.dshns-srowDesc{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
+      '.dshns-srowCtl{display:flex;align-items:center;gap:8px;flex:none}',
+      '.dshns-overlay{position:fixed;inset:0;z-index:1001;display:flex;align-items:center;justify-content:center;padding:max(24px,var(--dsh-frame-overlay-top,24px)) 24px}',
+      '.dshns-mask{position:absolute;inset:var(--dsh-frame-chrome-top,0px) 0 0;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur)}',
+      '.dshns-sheet{position:relative;z-index:1;box-sizing:border-box;display:flex;flex-direction:column;width:600px;max-width:calc(100vw - 48px);height:min(800px,calc(100vh - 2 * max(24px,var(--dsh-frame-overlay-top,24px))));border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent);overflow:hidden}',
+      '.dshns-sheetHead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:22px 14px 12px 24px;flex:none}',
+      '.dshns-sheetTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:16px;line-height:24px;font-weight:500}',
+      '.dshns-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font:inherit}',
+      '.dshns-close:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dshns-sheetBody{flex:1;min-height:0;overflow:auto;padding:0 24px 24px;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)}',
+      // 页脚：常驻在滚动区之外，顶部一条发丝线跟上方的设置行区分开
+      '.dshns-sheetFoot{flex:none;padding:12px 24px 14px;border-top:.5px solid var(--dsw-alias-border-l2)}',
+      '.dshns-repo{display:flex;flex-direction:column;gap:2px}',
+      '.dshns-repoLink{color:var(--dsw-alias-brand-primary);font-size:12px;line-height:18px;text-decoration:none}',
+      '.dshns-repoLink:hover{text-decoration:underline}',
+      '.dshns-repoUrl{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}',
       '.dshns-mute{border:none;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;padding:4px;border-radius:var(--dsw-radius-sm);display:inline-flex;align-items:center;line-height:0}',
       '.dshns-mute:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
       '.dshns-mute[data-muted="1"]{color:var(--dsw-alias-state-warn-primary)}',
@@ -291,10 +374,10 @@ window.__ModuleLoader__.load({
       }
 
       var NOTIFY_TEXT = {
-        done: { title: '任务完成', body: '这一轮已经跑完了' },
-        question: { title: '需要你回答', body: '模型正在等你回答问题' },
-        approval: { title: '需要你授权', body: '有操作在等你确认' },
-        error: { title: '出错了', body: '这一轮以错误结束' },
+        done: { title: '任务完成', body: '本轮任务已完成' },
+        question: { title: '需要你回答', body: '正在等待你的回答' },
+        approval: { title: '需要你授权', body: '正在等待你的授权' },
+        error: { title: '运行出错', body: '本轮以错误结束' },
       }
 
       /**
@@ -535,8 +618,9 @@ window.__ModuleLoader__.load({
         var b = base && base.events && base.events[k] ? base.events[k] : {}
         out.events[k] = { on: b.on !== false, sound: b.sound || ('default:' + k) }
         var sb = base && base.system && base.system.events ? base.system.events[k] : undefined
-        // 默认：需要你处理的两类开，纯播报的两类关（与宿主 defaultSettings 一致）
-        out.system.events[k] = typeof sb === 'boolean' ? sb : (k === 'question' || k === 'approval')
+        // 默认与宿主 defaultSettings 保持一致：
+        // 需要你回答 / 需要你授权 / 任务完成 三类弹，error 不弹
+        out.system.events[k] = typeof sb === 'boolean' ? sb : (k !== 'error')
       }
       if (!patch || typeof patch !== 'object') return out
       if (patch.mode) out.mode = patch.mode
@@ -577,9 +661,9 @@ window.__ModuleLoader__.load({
 
     // 事件元数据与模式选项提到模块作用域：两个组件（摘要行 / 设置面板）共用。
     var MODE_OPTIONS = [
-      { id: 'on', label: '开启声音提示', hint: '所有事件都会发出声音提示' },
-      { id: 'off', label: '关闭声音提示', hint: '所有事件都不发出声音提示' },
-      { id: 'smart', label: '智能判断', hint: '小鲸鱼挂件已经提示的事件不重复提示（它没开的事件仍由本插件提示）' },
+      { id: 'on', label: '开启提醒', hint: '所有事件均提醒' },
+      { id: 'off', label: '关闭提醒', hint: '所有事件均不提醒' },
+      { id: 'smart', label: '智能判断', hint: '与小鲸鱼挂件协助提醒（未开启事件由本插件提醒）' },
     ]
 
     function modeLabelOf(mode) {
@@ -595,165 +679,217 @@ window.__ModuleLoader__.load({
       return MODE_OPTIONS[0].hint
     }
 
-    // ============================================== 官方风格的下拉（缺组件则降级）
+    // ============================================ 官方风格下拉（自绘，零依赖）
     /**
-     * 单选下拉。优先用官方 primitives 的 Menu（与「详细/简洁」那类下拉同款外观：
-     * 药丸触发器 + 展开卡片 + 选中打勾）；拿不到官方组件时退回原生 <select>。
+     * 单选下拉。外观**逐条对齐**官方 Menu（`Menu.module.css`）：
+     *   · 触发器：药丸按钮（同官方 Pill 的尺寸观感）
+     *   · 卡片：padding 4px、radius-lg、prominent 立体阴影、菜单材质底色
+     *   · 选项行：min-height 34px / padding 6px 8px / radius-md / 13px 文字
+     *   · hover 用 interactive-bg-hover；**选中项不打底色，而是在右侧打勾**
+     *     （官方 `.selected{background:transparent}` + 尾部 check 就是这么设计的）
+     *
+     * 之前这里在拿不到官方组件时退回原生 <select>，弹层是操作系统的蓝色高亮列表，
+     * 和官方完全是两种东西 —— 现在改成自绘，任何宿主下都是同一个样子。
      *
      * @param props.items     [{ id, label }]
      * @param props.value     当前选中 id
      * @param props.onChange  (id) => void
      */
     function Dropdown(props) {
-      var Menu = prim('Menu')
-      var Button = prim('Button')
       var openPair = React.useState(false)
       var open = openPair[0]
       var setOpen = openPair[1]
+      var rootRef = React.useRef(null)
       var items = props.items || []
       var current = null
       for (var i = 0; i < items.length; i++) if (items[i].id === props.value) current = items[i]
 
-      // 降级路径：原生 select（功能完全一致，只是外观不跟官方）
-      if (!Menu || !Button) {
-        return h('select', {
-          className: 'dshns-select' + (props.className ? ' ' + props.className : ''),
-          value: props.value,
-          disabled: !!props.disabled,
-          title: props.title,
-          onChange: function (e) { props.onChange(e.target.value) },
-        }, items.map(function (it) {
-          return h('option', { key: it.id, value: it.id }, it.label)
-        }))
+      // 展开期间才挂全局监听：点外面收起
+      React.useEffect(function () {
+        if (!open) return undefined
+        function onDown(e) {
+          var el = rootRef.current
+          var t = e && e.target
+          if (el && t && el.contains && el.contains(t)) return
+          setOpen(false)
+        }
+        try { document.addEventListener('mousedown', onDown) } catch (err) {}
+        return function () {
+          try { document.removeEventListener('mousedown', onDown) } catch (err) {}
+        }
+      }, [open])
+
+      var rows = []
+      for (var j = 0; j < items.length; j++) {
+        rows.push(h('button', {
+          key: items[j].id,
+          className: 'dshns-ddItem',
+          type: 'button',
+          role: 'option',
+          'aria-selected': items[j].id === props.value ? 'true' : 'false',
+          onClick: (function (id) {
+            return function () {
+              setOpen(false)
+              if (id !== props.value) props.onChange(id)
+            }
+          })(items[j].id),
+        },
+          h('span', { className: 'dshns-ddItemLabel' }, items[j].label),
+          items[j].id === props.value ? h(SvgIcon, { name: 'check', size: 14, className: 'dshns-ddCheck' }) : null,
+        ))
       }
 
-      var Chevron = prim('IconChevronDownOutlineRegular')
-      var ChevronUp = prim('IconChevronUpOutlineRegular')
-      // Menu 的 className 落在 anchor 包装元素上；把调用方给的 class 一起带上，
-      // 否则 .dshns-mode 这类布局类在官方路径下会被丢掉（降级路径却生效）。
-      return h(Menu, {
-        open: open,
-        onClose: function () { setOpen(false) },
-        onSelect: function (id) {
-          setOpen(false)
-          if (id !== props.value) props.onChange(id)
+      return h('div', {
+        className: 'dshns-dd' + (props.className ? ' ' + props.className : ''),
+        ref: rootRef,
+        // Esc 只收起这一层：stopPropagation 挡住冒泡，设置弹窗那层就不会跟着关。
+        // 官方 Menu 也是「只有最上层响应 Esc」的语义（靠 modal layer 栈）。
+        onKeyDown: function (e) {
+          if (e && e.key === 'Escape' && open) {
+            try { e.stopPropagation() } catch (err) {}
+            try { e.preventDefault() } catch (err) {}
+            setOpen(false)
+          }
         },
-        selectedId: props.value,
-        selection: 'check',
-        align: props.align || 'start',
-        portal: true,
-        className: 'dshns-menuAnchor' + (props.className ? ' ' + props.className : ''),
-        anchor: h(Button, {
-          variant: 'outline',
-          size: 'sm',
-          className: 'dshns-menuTrigger',
+      },
+        h('button', {
+          className: 'dshns-ddTrigger',
+          type: 'button',
           disabled: !!props.disabled,
           title: props.title,
-          icon: open
-            ? (ChevronUp ? h(ChevronUp, { size: 14 }) : null)
-            : (Chevron ? h(Chevron, { size: 14 }) : null),
+          'aria-haspopup': 'listbox',
+          'aria-expanded': open ? 'true' : 'false',
           onClick: function () { setOpen(!open) },
-        }, current ? current.label : (props.placeholder || '请选择')),
-        items: items,
-      })
+        },
+          h('span', { className: 'dshns-ddLabel' }, current ? current.label : (props.placeholder || '请选择')),
+          h(SvgIcon, { name: 'chevronDown', size: 14, strokeWidth: 1.3 }),
+        ),
+        open ? h('div', { className: 'dshns-ddCard', role: 'listbox' }, rows) : null,
+      )
     }
 
-    /** 试听按钮：官方按钮 + 播放图标（无文字，hover 有提示）。 */
-    function PreviewButton(props) {
-      var Button = prim('Button')
-      var Play = prim('IconPlayOutlineRegular')
-      if (!Button) {
-        return h('button', {
-          className: 'dshns-iconbtn',
-          type: 'button',
-          title: props.title || '试听',
-          'aria-label': props.title || '试听',
-          onClick: props.onClick,
-        }, h('span', { className: 'dshns-tri', 'aria-hidden': 'true' }, '▶'))
-      }
-      return h(Button, {
-        variant: 'outline',
-        size: 'sm',
+    /**
+     * 图标动作按钮（无文字）—— 播放与齿轮共用同一个实现。
+     *
+     * 规格统一，避免两个按钮长得不一样：28×28 方形、28px 高度、16px 图标槽、
+     * 常规色 label-secondary、hover 转 label-primary + 浅底（同官方 Modal 关闭键）。
+     */
+    function IconAction(props) {
+      return h('button', {
         className: 'dshns-iconbtn',
+        type: 'button',
+        title: props.title,
+        'aria-label': props.title,
+        onClick: props.onClick,
+      }, h(SvgIcon, { name: props.icon, size: 16, strokeWidth: ICON_MEDIUM_STROKE }))
+    }
+
+    /** 试听按钮：与齿轮同规格的图标动作。 */
+    function PreviewButton(props) {
+      return h(IconAction, {
         title: props.title || '试听',
-        'aria-label': props.title || '试听',
-        icon: Play ? h(Play, { size: 14 }) : null,
+        icon: 'play',
         onClick: props.onClick,
       })
     }
 
     /**
      * 齿轮按钮：打开独立设置界面。
-     * 图标用官方 IconSettingsOutlineMedium（16px、笔画 1.3px）——就是侧边栏
-     * 「通用设置」那一行用的同一个图标，保证两处外观完全一致；老宿主没有
-     * Medium 时退回 Regular。
+     * 用官方 IconSettingsOutline 的 Medium 笔画（1.3px）——就是侧边栏
+     * 「通用设置」那一行用的同一个图标，两处外观完全一致。
      */
     function GearButton(props) {
-      var Button = prim('Button')
-      var Gear = prim('IconSettingsOutlineMedium') || prim('IconSettingsOutlineRegular')
-      if (!Button) {
-        return h('button', {
-          className: 'dshns-iconbtn',
-          type: 'button',
-          title: props.title || '设置',
-          'aria-label': props.title || '设置',
-          onClick: props.onClick,
-        }, h('span', { 'aria-hidden': 'true' }, '⚙'))
-      }
-      return h(Button, {
-        variant: 'ghost',
-        size: 'sm',
-        className: 'dshns-iconbtn',
+      return h(IconAction, {
         title: props.title || '设置',
-        'aria-label': props.title || '设置',
-        icon: Gear ? h(Gear, { size: 16 }) : null,
+        icon: 'settings',
         onClick: props.onClick,
       })
     }
 
-    /** 开关：官方 Switch，缺失时用原生 checkbox。 */
+    /**
+     * 开关。自绘并**照抄官方 Switch 的规格**（`Switch.module.css`）：
+     * 36×20 胶囊轨道、2px 内边距、16×16 圆形滑块、选中 16px 位移；
+     * 关 = border-l3 底 + switch-thumb 滑块，开 = brand-primary 底 + 白滑块。
+     * 用 `role="switch"` + `aria-checked`，和官方一样让语义与视觉来自同一个状态。
+     */
     function Toggle(props) {
-      var Switch = prim('Switch')
-      if (!Switch) {
-        return h('input', {
-          type: 'checkbox',
-          checked: !!props.checked,
-          disabled: !!props.disabled,
-          title: props.title,
-          onChange: function (e) { props.onChange(e.target.checked) },
-        })
-      }
-      return h(Switch, {
-        checked: !!props.checked,
+      return h('button', {
+        className: 'dshns-switch',
+        type: 'button',
+        role: 'switch',
+        'aria-checked': props.checked ? 'true' : 'false',
         disabled: !!props.disabled,
         title: props.title,
-        label: props.label || props.title || '',
-        onChange: props.onChange,
-      })
+        'aria-label': props.label || props.title || '开关',
+        onClick: function () { props.onChange(!props.checked) },
+      }, h('span', { className: 'dshns-thumb' }))
     }
 
-    /** 承载独立设置界面的容器：官方 Modal，缺失时自绘遮罩层。 */
+    /**
+     * 一行设置（官方 Setting-Cell 模式）：左边标题 + 可选说明，右边控件，行间发丝线。
+     * 与「通用设置」里「权限 / 语言 / 字号大小」那些行同构 —— 界面统一性的关键。
+     */
+    function SettingRow(props) {
+      return h('div', { className: 'dshns-srow' },
+        h('div', { className: 'dshns-srowText' },
+          h('div', { className: 'dshns-srowTitle' }, props.title),
+          props.desc ? h('div', { className: 'dshns-srowDesc' }, props.desc) : null,
+        ),
+        h('div', { className: 'dshns-srowCtl' }, props.children),
+      )
+    }
+
+    /**
+     * 承载独立设置界面的容器。
+     *
+     * 为什么不用官方 primitives 的 `Modal`：它是 **380px 窄卡片**
+     * （`.dialog{width:min(380px,100%)}`），而设置类界面在 DSH 里用的是
+     * 800×800 的面板（见 ui-settings-general 的 `.panel`）。两者宽高比完全不同，
+     * 塞进去既不像官方、内容也会被压扁。
+     *
+     * 所以这里自绘 overlay + sheet，但**尺寸与视觉 token 逐条照抄官方设置面板**，
+     * 外观与「通用设置」那个窗口一致；关闭由我们自己接管（点 X / 点遮罩 / Esc 都能关），
+     * 不依赖嵌套弹层的内部行为。
+     */
     function Panel(props) {
-      var Modal = prim('Modal')
-      if (Modal) {
-        return h(Modal, {
-          open: true,
-          onClose: props.onClose,
-          title: props.title,
-          closeLabel: '关闭',
-          className: 'dshns-modal',
-        }, props.children)
-      }
+      // Esc 关闭：只在打开期间挂 document 监听，卸载即摘掉
+      React.useEffect(function () {
+        function onKey(e) {
+          if (e && e.key === 'Escape' && !e.shiftKey) {
+            try { e.preventDefault() } catch (err) {}
+            props.onClose()
+          }
+        }
+        try { document.addEventListener('keydown', onKey) } catch (err) {}
+        return function () {
+          try { document.removeEventListener('keydown', onKey) } catch (err) {}
+        }
+      }, [])
+
       return h('div', { className: 'dshns-overlay', role: 'presentation' },
-        h('div', { className: 'dshns-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': props.title },
+        h('div', {
+          className: 'dshns-mask',
+          'aria-hidden': 'true',
+          onClick: function () { props.onClose() },
+        }),
+        h('div', {
+          className: 'dshns-sheet',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-label': props.title,
+        },
           h('div', { className: 'dshns-sheetHead' },
-            h('div', { className: 'dshns-sheetTitle' }, props.title),
+            h('h2', { className: 'dshns-sheetTitle' }, props.title),
             h('button', {
-              className: 'dshns-x', type: 'button', 'aria-label': '关闭',
-              onClick: props.onClose,
-            }, '✕'),
+              className: 'dshns-close',
+              type: 'button',
+              'aria-label': '关闭',
+              title: '关闭',
+              onClick: function () { props.onClose() },
+            }, h(SvgIcon, { name: 'close', size: 16 })),
           ),
           h('div', { className: 'dshns-sheetBody' }, props.children),
+          props.footer ? h('div', { className: 'dshns-sheetFoot' }, props.footer) : null,
         ),
       )
     }
@@ -776,11 +912,6 @@ window.__ModuleLoader__.load({
         ev[kind] = patch
         rt.saveSettings({ events: ev })
       }
-      function setSysEvent(kind, on) {
-        var ev = {}
-        ev[kind] = on
-        rt.saveSettings({ system: { events: ev } })
-      }
 
       // 声音候选：内置 + 自定义
       var options = []
@@ -798,59 +929,42 @@ window.__ModuleLoader__.load({
       }
 
       var perm = s.notifyPermission || 'default'
-      var permText = perm === 'granted' ? '已授权'
-        : perm === 'denied' ? '已被拒绝（需在浏览器/系统设置里恢复）'
+      var permText = perm === 'granted' ? '已开启'
+        : perm === 'denied' ? '已拒绝，需在系统设置中恢复'
           : perm === 'unsupported' ? '当前环境不支持'
-            : '尚未授权'
+            : '未开启'
 
       var eventRows = EVENT_META.map(function (meta) {
         var ev = settings.events[meta.kind]
-        return h('div', { className: 'dshns-pRow', key: meta.kind },
-          h('div', { className: 'dshns-pLabel' }, meta.label),
-          h('div', { className: 'dshns-pCtl' },
-            h(Toggle, {
-              checked: ev.on !== false,
-              disabled: settings.mode === 'off',
-              label: meta.label,
-              title: settings.mode === 'off' ? '总模式为「关闭声音提示」时不可单独开启' : '是否发出声音提示',
-              onChange: function (v) { setEvent(meta.kind, { on: v }) },
-            }),
-            h(Dropdown, {
-              items: options,
-              value: valueOf(meta.kind),
-              disabled: settings.mode === 'off' || ev.on === false,
-              title: '选择声音',
-              align: 'end',
-              onChange: function (id) {
-                setEvent(meta.kind, { sound: id })
-                // 换完立刻试听，不用再去点播放按钮确认选对了
-                rt.play(id, { force: true })
-              },
-            }),
-            h(PreviewButton, {
-              title: '试听「' + meta.label + '」的声音',
-              onClick: function () { rt.play(valueOf(meta.kind), { force: true }) },
-            }),
-          ),
+        return h(SettingRow, { key: meta.kind, title: meta.label },
+          h(Toggle, {
+            checked: ev.on !== false,
+            disabled: settings.mode === 'off',
+            label: meta.label,
+            title: settings.mode === 'off' ? '模式为「关闭提醒」时不可单独开启' : '是否提醒',
+            onChange: function (v) { setEvent(meta.kind, { on: v }) },
+          }),
+          h(Dropdown, {
+            items: options,
+            value: valueOf(meta.kind),
+            disabled: settings.mode === 'off' || ev.on === false,
+            title: '选择声音',
+            align: 'end',
+            onChange: function (id) {
+              setEvent(meta.kind, { sound: id })
+              // 换完立刻试听，不用再去点播放按钮确认选对了
+              rt.play(id, { force: true })
+            },
+          }),
+          h(PreviewButton, {
+            title: '试听',
+            onClick: function () { rt.play(valueOf(meta.kind), { force: true }) },
+          }),
         )
       })
 
-      // 系统通知：逐事件一行
-      var sysRows = EVENT_META.map(function (meta) {
-        return h('div', { className: 'dshns-pRow', key: 'sys-' + meta.kind },
-          h('div', { className: 'dshns-pLabel' }, meta.label),
-          h('div', { className: 'dshns-pCtl' },
-            h(Toggle, {
-              checked: sys.events[meta.kind] === true,
-              disabled: !sys.enabled,
-              label: meta.label,
-              title: sys.enabled ? '这个事件是否弹系统通知' : '先打开上面的系统通知总开关',
-              onChange: function (v) { setSysEvent(meta.kind, v) },
-            }),
-          ),
-        )
-      })
-
+      // 系统通知只保留总开关（按需简化）：哪些事件弹由宿主默认值决定，
+      // 不在界面上再暴露逐事件开关。
       var customLines = []
       for (var c = 0; c < s.sounds.custom.length; c++) {
         var item = s.sounds.custom[c]
@@ -867,74 +981,84 @@ window.__ModuleLoader__.load({
         ))
       }
 
+      var footer = h('div', { className: 'dshns-repo' },
+        h('a', {
+          className: 'dshns-repoLink',
+          href: REPO_URL,
+          target: '_blank',
+          rel: 'noreferrer noopener',
+          title: REPO_URL,
+        }, '欢迎访问GitHub仓库送上star与issue！'),
+        h('span', { className: 'dshns-repoUrl' }, 'github.com/SciF-Lin/dsh-notify-sound-plus'),
+      )
+
       // 注意：模式不在这里 —— 它已经在「通用设置」那一行（二级页面）上显示了，
       // 弹窗里重复一份只会让人怀疑两处会不会不同步。
-      return h(Panel, { title: '声音提醒设置', onClose: props.onClose },
+      return h(Panel, { title: '声音提醒设置', onClose: props.onClose, footer: footer },
         h('div', { className: 'dshns-panel' },
-          // —— 声音提示 ——
-          h('div', { className: 'dshns-pSection' }, '声音提示'),
-          h('div', { className: 'dshns-pRows' }, eventRows),
-          h('div', { className: 'dshns-pRow' },
-            h('div', { className: 'dshns-pLabel' }, '音量'),
-            h('div', { className: 'dshns-pCtl' },
+          // —— 提醒 ——
+          h('div', { className: 'dshns-pSection' }, '提醒'),
+          h('div', { className: 'dshns-pGroup' }, eventRows),
+          h('div', { className: 'dshns-pGroup' },
+            h(SettingRow, { title: '音量' },
               h('input', {
                 className: 'dshns-range',
                 type: 'range', min: 0, max: 1, step: 0.05,
                 value: settings.volume,
+                title: '音量',
                 onChange: function (e) { rt.saveSettings({ volume: Number(e.target.value) }) },
               }),
               h('span', { className: 'dshns-volv' }, Math.round(settings.volume * 100) + '%'),
             ),
-          ),
-          h('div', { className: 'dshns-pRow' },
-            h('div', { className: 'dshns-pLabel' }, '前台不提示'),
-            h('div', { className: 'dshns-pCtl' },
+            h(SettingRow, {
+              title: '前台运行时不提醒',
+              desc: '仅在后台运行时提醒',
+            },
               h(Toggle, {
                 checked: !!settings.muteWhenFocused,
-                label: '应用在前台运行时不提示',
-                title: '应用在前台运行时不出声',
+                label: '前台运行时不提醒',
+                title: '仅在后台运行时提醒',
                 onChange: function (v) { rt.saveSettings({ muteWhenFocused: v }) },
               }),
-              h('span', { className: 'dshns-pHintInline' }, '应用在前台运行时不提示'),
             ),
           ),
 
-          // —— 系统通知 ——
+          // —— 系统通知 ——（只保留总开关）
           h('div', { className: 'dshns-pSection' }, '系统通知'),
-          h('div', { className: 'dshns-pRow' },
-            h('div', { className: 'dshns-pLabel' }, '总开关'),
-            h('div', { className: 'dshns-pCtl' },
+          h('div', { className: 'dshns-pGroup' },
+            h(SettingRow, {
+              title: '系统通知',
+              desc: '需要回答 / 授权 / 任务完成时 系统通知 · 权限：' + permText,
+            },
               h(Toggle, {
                 checked: !!sys.enabled,
                 label: '系统通知',
-                title: '在系统通知中心弹出提醒',
+                title: '通过系统通知提醒',
                 onChange: function (v) {
                   rt.saveSettings({ system: { enabled: v } })
                   // 打开总开关时顺手申请权限（必须在用户手势里发起）
                   if (v && perm !== 'granted') {
                     rt.requestPermission().then(function (r) {
-                      setMsg(r === 'granted' ? '已获得通知权限' : '未能获得通知权限，系统通知不会弹出')
+                      setMsg(r === 'granted' ? '已开启通知权限' : '未获得通知权限，系统通知将无法使用')
                     })
                   }
                 },
               }),
-              h('span', { className: 'dshns-pHintInline' }, '权限：' + permText),
             ),
           ),
-          h('div', { className: 'dshns-pRows' }, sysRows),
-          h('div', { className: 'dshns-pHint' }, '系统通知与声音是两条独立通道：临时静音只静声音，不影响通知。'),
 
           // —— 自定义音频 ——
           h('div', { className: 'dshns-pSection' }, '自定义音频'),
-          h('div', { className: 'dshns-pRow' },
-            h('div', { className: 'dshns-pLabel' }, '上传'),
-            h('div', { className: 'dshns-pCtl' },
+          h('div', { className: 'dshns-pGroup' },
+            h(SettingRow, {
+              title: '上传音频',
+              desc: 'mp3 / wav / ogg / m4a，单个 ≤ 2MB',
+            },
               h('button', {
                 className: 'dshns-btn',
                 type: 'button',
                 onClick: function () { if (fileRef.current) fileRef.current.click() },
-              }, '选择音频文件'),
-              h('span', { className: 'dshns-pHintInline' }, 'mp3 / wav / ogg / m4a，单个 ≤ 2MB'),
+              }, '选择文件'),
               h('input', {
                 ref: fileRef,
                 type: 'file',
@@ -945,7 +1069,7 @@ window.__ModuleLoader__.load({
                   if (!f) return
                   setMsg('正在上传…')
                   rt.uploadSound(f).then(function (sound) {
-                    setMsg(sound ? '已添加「' + sound.name + '」，可在上方声音下拉里选它' : '已添加')
+                    setMsg(sound ? '已添加「' + sound.name + '」，可在上方声音列表中选择' : '已添加')
                   }).then(null, function (err) {
                     setMsg('上传失败：' + (err && err.message ? err.message : err))
                   })
@@ -953,13 +1077,13 @@ window.__ModuleLoader__.load({
                 },
               }),
             ),
+            customLines.length
+              ? h(SettingRow, { title: '已上传', desc: '删除后，使用该项的事件将回落到默认声音' },
+                h('div', { className: 'dshns-customs' }, customLines))
+              : null,
           ),
-          customLines.length ? h('div', { className: 'dshns-customs' }, customLines) : null,
 
           (msg || s.error) ? h('div', { className: 'dshns-msg' }, msg || s.error) : null,
-          !hasPrimitives
-            ? h('div', { className: 'dshns-hint' }, '提示：当前宿主未提供官方 UI 组件，界面已降级显示。')
-            : null,
         ),
       )
     }
@@ -995,7 +1119,7 @@ window.__ModuleLoader__.load({
             onChange: function (m) { rt.saveSettings({ mode: m }) },
           }),
           h(PreviewButton, {
-            title: '试听「任务完成」的声音',
+            title: '试听',
             onClick: function () { rt.play(doneSound, { force: true }) },
           }),
           h(GearButton, {
