@@ -58,18 +58,21 @@ window.__ModuleLoader__.load({
 ```
 
 外部可解析模块仅限平台种子表：`react`、`react-dom`、`react/jsx-runtime`、
-`@deepseek-ai/dsh-client-ui-primitives`。**本插件只 require `react`**（避免 primitives 版本差异）。
+`@deepseek-ai/dsh-client-ui-primitives`。本插件 require `react` + 官方 primitives，
+但 **primitives 是可选依赖**：拿不到就整体降级为自绘控件，绝不能白屏。
 
 ## 3. 两个 slot
 
 ### 3.1 `settings.general.item`（通用设置里的行）
 
+只放**摘要**：标题 + 模式下拉 + 播放图标按钮 + 齿轮按钮。完整设置走齿轮打开的弹窗。
+
 ```js
 ctx.slots.inject('settings.general.item', () => ctx.slots.register({
   name: 'settings.general.item',
-  id: 'dsh-notify-sound',      // 必填
-  order: 12,                   // Language=0, Appearance=10, FontSize=11, ComposerEnter=20
-  inject: () => ({ api })      // 额外 props，会合并进组件 props
+  id: 'dsh-notify-sound-plus',  // 必填
+  order: 12,                    // Language=0, Appearance=10, FontSize=11, ComposerEnter=20
+  inject: () => ({ api })       // 额外 props，会合并进组件 props
 }, SoundRow))
 ```
 
@@ -80,13 +83,36 @@ ctx.slots.inject('settings.general.item', () => ctx.slots.register({
 ```js
 ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
   name: 'conversation.input.left',
-  id: 'dsh-notify-sound-mute',
+  id: 'dsh-notify-sound-plus-mute',
   order: 10,
   inject: () => ({ api })
 }, MuteButton))
 ```
 
 `kind: 'list'`、`scope: 'session'`，仅在真实会话中渲染（`sessionId === undefined` 时宿主不渲染该 slot）。
+
+### 3.3 独立设置弹窗（点齿轮）
+
+用官方 `Modal` 承载（拿不到就用自绘遮罩 `.dshns-overlay`）。里面分三组：
+
+- **声音提示**：四事件（开关 + 声音下拉 + 播放按钮）、音量、「应用在前台运行时不提示」
+- **系统通知**：总开关 + 四事件开关（系统通知与声音是两条独立通道）
+- **自定义音频**：上传 + 列表
+
+**模式不放进弹窗**——它已经显示在通用设置那一行，重复一份只会让人怀疑两处不同步。
+
+### 3.4 官方组件用法（已核实）
+
+| 组件 | 关键 props |
+|---|---|
+| `Menu` | `open`(受控) / `anchor` / `items:[{id,label}]` / `selectedId` / `selection:'check'` / `onSelect(id)` / `onClose` / `portal` / `align` |
+| `Button` | `variant:'ghost'\|'outline'\|'primary'\|'toolbar'` / `size:'sm'\|'md'` / `icon` / `title` |
+| `Modal` | `open` / `onClose` / `title` / `closeLabel` |
+| `Switch` | `checked` / `onChange(next)` / `disabled` / `label` / `title` |
+| 图标 | `IconSettingsOutlineMedium`（16px，与侧边栏「通用设置」同一个）、`IconPlayOutlineRegular`、`IconChevronDownOutlineRegular` |
+
+⚠️ `Menu` 的 `className` 落在 anchor 包装元素上；调用方给的布局类必须显式并进去，
+否则官方路径下类会被丢掉（降级路径反而生效）。
 
 ## 4. 宿主 HTTP 契约（冻结）
 

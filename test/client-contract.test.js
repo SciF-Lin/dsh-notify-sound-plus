@@ -1,14 +1,18 @@
 /**
- * 客户端半区契约检查：在假 __ModuleLoader__ / 假 DOM / 假 React 里执行
- * client/client.js，确认它能被官方加载器接受。
+ * dsh-notify-sound-plus —— 客户端半区契约测试（不依赖真实浏览器）
  *
- * 这里查的是**加载器契约**（最容易出错、也最难在真实页面上报错的部分）：
- *   ① 顶层调用 window.__ModuleLoader__.load({id, factory})
- *   ② id 必须 === package.json 的 name（宿主用解析出的包名标识浏览器模块）
- *   ③ factory(require) 返回 { name, apply }，且 name 与 id 一致
- *   ④ apply(ctx) 只用官方客户端 ctx 的能力：effect / slots.inject / slots.register
- *   ⑤ 两个 slot 的注册形状正确（name / id / order / inject / 组件函数）
- *   ⑥ require 只请求平台种子表里允许的模块（这里是 react）
+ * 用 vm 在一个手写的假浏览器环境里执行 client/client.js，验证：
+ *   ① 能被官方模块加载器接受（id / exports / inject）
+ *   ② 只请求平台种子表里的模块；缺官方 ui-primitives 时能降级运行
+ *   ③ 两个 slot 的注册形状正确
+ *   ④ 通用设置行 = 模式 + 试听 + 齿轮（不再内联整块设置）
+ *   ⑤ 齿轮打开独立弹窗（官方 Modal），面板含声音提示 / 系统通知 / 自定义音频
+ *   ⑥ 换声音后自动试听；系统通知按权限与开关正确弹出
+ *
+ * 为了能断言「齿轮内部长什么样」，这里实现了一个极简递归渲染器：
+ * 它会真正调用函数组件，把元素树展开到宿主元素（button/div/…）。
+ *
+ * 运行： node --test test/client-contract.test.js
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -22,58 +26,96 @@ const PKG_ROOT = path.resolve(HERE, '..')
 const CLIENT_SRC = fs.readFileSync(path.join(PKG_ROOT, 'client', 'client.js'), 'utf8')
 const PKG = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8'))
 
-/** 极简 React 假实现：只需要让组件函数能跑、hooks 不崩。 */
+/** 极简 React：createElement 把 children 放进 props.children；hooks 按下标存状态。 */
 function fakeReact() {
-  const states = []
+  const slots = []
   let cursor = 0
   return {
     createElement(type, props, ...children) {
-      return { type, props: props || {}, children: children.flat().filter((c) => c !== null && c !== undefined && c !== false) }
+      const p = Object.assign({}, props || {})
+      const kids = children
+        .flat(Infinity)
+        .filter((c) => c !== null && c !== undefined && c !== false && c !== true)
+      if (kids.length > 0) p.children = kids.length === 1 ? kids[0] : kids
+      return { type, props: p }
     },
     useState(initial) {
       const i = cursor++
-      if (states[i] === undefined) states[i] = typeof initial === 'function' ? initial() : initial
-      const setter = (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v }
-      return [states[i], setter]
+      if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial
+      const setter = (v) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v }
+      return [slots[i], setter]
     },
     useEffect() { return undefined },
-    useRef(v) { return { current: v } },
-    __resetCursor() { cursor = 0 },
+    useRef(v) {
+      const i = cursor++
+      if (!(i in slots)) slots[i] = { current: v }
+      return slots[i]
+    },
+    __begin() { cursor = 0 },
   }
 }
 
+/** 把元素树递归展开成宿主元素树（会真正调用函数组件）。 */
+function render(node, React) {
+  if (node === null || node === undefined || node === false || node === true) return null
+  if (typeof node === 'string' || typeof node === 'number') return node
+  if (Array.isArray(node)) return node.map((n) => render(n, React)).filter((n) => n !== null)
+  if (typeof node.type === 'function') return render(node.type(node.props), React)
+  const kids = node.props ? node.props.children : undefined
+  const rendered = kids === undefined ? [] : [].concat(render(kids, React)).flat(Infinity).filter((n) => n !== null)
+  return { type: node.type, props: node.props || {}, children: rendered }
+}
+
 /** 造一个假浏览器环境 + 假加载器。 */
-function makeEnv() {
+function makeEnv(opts) {
+  const o = opts || {}
   const registered = []
   const styleTags = []
   const fetches = []
+  const notifications = []
   const listeners = new Map()
-  let requested = []
+  const requested = []
+  let notifPermission = o.permission || 'granted'
 
   const React = fakeReact()
 
+  // 官方 ui-primitives 替身：保留 props（含 className / title）以便断言，并透传 children。
+  // Button 的 icon 是 **prop** 而不是 children，真实 Button 会把它渲染进按钮里；
+  // 这里必须同样把 icon 合进 props.children，否则树遍历看不到图标（测试会假阴性）。
+  // 注意 children 必须放在 props 上 —— render() 对宿主元素只读 props.children。
+  const passthrough = (tag) => (p) => ({ type: tag, props: p || {} })
+  const buttonStub = (p) => {
+    const kids = []
+    if (p && p.icon) kids.push(p.icon)
+    if (p && p.children !== undefined) kids.push(p.children)
+    return { type: 'Button', props: Object.assign({}, p || {}, { children: kids }) }
+  }
+  const primitivesStub = {
+    Menu: passthrough('Menu'),
+    Button: buttonStub,
+    Modal: passthrough('Modal'),
+    Switch: passthrough('Switch'),
+    IconChevronDownOutlineRegular: passthrough('Icon'),
+    IconChevronUpOutlineRegular: passthrough('Icon'),
+    IconPlayOutlineRegular: passthrough('Icon'),
+    IconSettingsOutlineMedium: passthrough('Icon'),
+    IconSettingsOutlineRegular: passthrough('Icon'),
+  }
+
   const win = {
-    __ModuleLoader__: {
-      load(row) { registered.push(row) },
-    },
+    __ModuleLoader__: { load(row) { registered.push(row) } },
     AudioContext: class {
       constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {} }
       createGain() { return { gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} } }
-      createOscillator() {
-        return { type: '', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} }
-      }
+      createOscillator() { return { type: '', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} } }
       resume() { return Promise.resolve() }
       close() { return Promise.resolve() }
     },
     Audio: class { constructor(u) { this.src = u } play() { return Promise.resolve() } },
     FileReader: class {},
-    fetch(url, opts) {
-      fetches.push({ url, opts })
-      // 一律返回一个"空但合法"的响应，让 runtime.start() 能走完不炸
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({}),
-      })
+    fetch(url, o2) {
+      fetches.push({ url, opts: o2 })
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
     },
     setInterval() { return 1 },
     clearInterval() {},
@@ -88,42 +130,71 @@ function makeEnv() {
     document: {
       visibilityState: 'visible',
       hasFocus: () => true,
-      head: {
-        appendChild(node) { styleTags.push(node) },
-      },
-      createElement(tag) {
-        return { tagName: tag, textContent: '', setAttribute() {}, remove() {} }
-      },
+      head: { appendChild(node) { styleTags.push(node) } },
+      createElement(tag) { return { tagName: tag, textContent: '', setAttribute() {}, remove() {} } },
       querySelector: () => null,
     },
   }
   win.window = win
 
+  const NotificationStub = function (title, options) {
+    notifications.push({ title, options })
+    this.title = title
+    this.options = options
+    this.close = function () {}
+  }
+  if (o.notification !== false) {
+    NotificationStub.permission = notifPermission
+    NotificationStub.requestPermission = function () {
+      notifPermission = o.requestDenied ? 'denied' : 'granted'
+      return Promise.resolve(notifPermission)
+    }
+    win.Notification = NotificationStub
+  }
+  win.__setPermission = function (p) { notifPermission = p; NotificationStub.permission = p }
+
   const ctx = vm.createContext(win)
   return {
     win,
     ctx,
+    React,
     registered,
     styleTags,
     fetches,
-    get requested() { return requested },
+    notifications,
+    requested,
     load() {
-      // require 只允许平台种子表
       const requireFn = (name) => {
         requested.push(name)
         if (name === 'react') return React
+        if (name === '@deepseek-ai/dsh-client-ui-primitives') {
+          if (o.noPrimitives) throw new Error('模块不可解析（模拟旧宿主）: ' + name)
+          return primitivesStub
+        }
         throw new Error('模块不可解析（不在平台种子表里）: ' + name)
       }
-      vm.runInContext(CLIENT_SRC, ctx, {
-        filename: 'client.js',
-        // 让 factory 里的 require 指向我们的函数
-      })
-      // 顶层只注册工厂，这里手动执行它
+      vm.runInContext(CLIENT_SRC, ctx, { filename: 'client.js' })
       const row = registered[registered.length - 1]
       return row.factory(requireFn)
     },
+    /** 渲染一棵元素树（带 hooks 复位，保证多次渲染读到最新 state）。 */
+    render(node) {
+      React.__begin()
+      return render(node, React)
+    },
+    /**
+     * 挂载一个组件并渲染。
+     * 必须由这里统一「复位 hooks → 调用组件 → 展开树」：如果让调用方先 `Comp({})`
+     * 再交给 render，hooks 的游标就会跨次累积，读到错位的 state（曾导致面板打不开）。
+     */
+    mount(Comp, props) {
+      React.__begin()
+      return render(React.createElement(Comp, props), React)
+    },
   }
 }
+
+// ============================================================ 加载器契约
 
 test('顶层调用 __ModuleLoader__.load，且 id === package.json 的 name', () => {
   const env = makeEnv()
@@ -132,19 +203,6 @@ test('顶层调用 __ModuleLoader__.load，且 id === package.json 的 name', ()
   const row = env.registered[0]
   assert.equal(typeof row.factory, 'function', 'factory 必须是函数')
   assert.equal(row.id, PKG.name, 'factory 的 id 必须等于包名（宿主用包名标识浏览器模块）')
-})
-
-test('只 require 平台种子表里的模块（react）', () => {
-  const env = makeEnv()
-  env.load()
-  for (const name of env.requested) {
-    assert.ok(
-      name === 'react' || name === 'react/jsx-runtime' || name === 'react-dom' ||
-      name === '@deepseek-ai/dsh-client-ui-primitives',
-      '请求了非基线模块: ' + name,
-    )
-  }
-  assert.ok(env.requested.indexOf('react') >= 0, '至少要用到 react')
 })
 
 test('factory 返回 {name, apply}，name 与包名一致', () => {
@@ -158,26 +216,21 @@ test('导出了 cordis 服务 inject（否则 ctx.slots 会被代理挡住）', 
   const env = makeEnv()
   const mod = env.load()
   assert.ok(Array.isArray(mod.inject), 'exports.inject 必须是数组')
-  // 注意：这个数组在 vm 的 realm 里创建，deepStrictEqual 会因为原型不同而失败，
-  // 所以只比较内容与长度。
+  // 该数组在 vm 的 realm 里创建，deepStrictEqual 会因原型不同失败，故逐项比较
   assert.equal(mod.inject.length, 1, '只应声明 slots')
   assert.equal(mod.inject[0], 'slots')
-  // 只用 slots：数据走 fetch，不依赖 connection/locale，声明多了反而会拖住挂载
-  assert.equal(mod.inject.join(','), 'slots')
 })
 
 test('模拟 cordis 的代理守门：没 inject 就取不到 slots', () => {
-  // 复刻 cordis ReflectService.handler 的语义：未声明 inject 的服务属性一取就抛。
   function makeGatedCtx(injectList) {
-    const slots = {
-      inject(s, r) { injectCalls.push(s); r() },
-      register(m) { registrations.push(m); return () => {} },
-    }
     const injectCalls = []
     const registrations = []
     const raw = {
       effect() { return () => {} },
-      slots,
+      slots: {
+        inject(s, r) { injectCalls.push(s); r() },
+        register(m) { registrations.push(m); return () => {} },
+      },
     }
     const allowed = new Set(injectList)
     const ctx = new Proxy(raw, {
@@ -197,55 +250,51 @@ test('模拟 cordis 的代理守门：没 inject 就取不到 slots', () => {
   const env = makeEnv()
   const mod = env.load()
 
-  // ① 不声明 inject：必须抛（证明这个门是真的，测试不会假绿）
   const bad = makeGatedCtx([])
   assert.throws(() => mod.apply(bad.ctx), /without inject/, '未声明 inject 时应当被代理挡住')
 
-  // ② 按模块自己声明的 inject 放行：必须不抛，且两个 slot 都注册上
   const good = makeGatedCtx(mod.inject)
   assert.doesNotThrow(() => mod.apply(good.ctx))
   assert.deepEqual(good.injectCalls.sort(), ['conversation.input.left', 'settings.general.item'])
   assert.equal(good.registrations.length, 2)
 })
 
-test('apply 只用官方客户端 ctx 能力，并注册两个 slot', () => {
+test('只请求平台种子表里的模块（react + 官方 primitives）', () => {
   const env = makeEnv()
-  const mod = env.load()
-
-  const registrations = []
-  const injects = []
-  const effects = []
-  const fakeCtx = {
-    effect(cb, label) { effects.push({ cb, label }); return () => {} },
-    slots: {
-      inject(slot, register) { injects.push(slot); register() },
-      register(meta, component) { registrations.push({ meta, component }); return () => {} },
-    },
+  env.load()
+  for (const name of env.requested) {
+    assert.ok(
+      name === 'react' || name === 'react/jsx-runtime' || name === 'react-dom' ||
+      name === '@deepseek-ai/dsh-client-ui-primitives',
+      '请求了非基线模块: ' + name,
+    )
   }
-
-  mod.apply(fakeCtx)
-
-  assert.deepEqual(injects.sort(), ['conversation.input.left', 'settings.general.item'])
-  assert.equal(registrations.length, 2, '应注册两个 slot 条目')
-
-  for (const r of registrations) {
-    assert.equal(typeof r.meta.name, 'string')
-    assert.equal(r.meta.name, injects.find((s) => s === r.meta.name) || r.meta.name, 'meta.name 应是该 slot 名')
-    assert.equal(typeof r.meta.id, 'string', 'id 必填')
-    assert.ok(r.meta.id.length > 0)
-    assert.equal(typeof r.component, 'function', '必须给一个组件函数')
-  }
-
-  const names = registrations.map((r) => r.meta.name).sort()
-  assert.deepEqual(names, ['conversation.input.left', 'settings.general.item'])
+  assert.ok(env.requested.indexOf('react') >= 0, '至少要用到 react')
+  assert.ok(env.requested.indexOf('@deepseek-ai/dsh-client-ui-primitives') >= 0,
+    '应当尝试用官方 primitives（Menu/Button/Modal/Switch 等）')
 })
 
+test('官方 primitives 缺失时必须降级运行，而不是整块 UI 挂掉', () => {
+  const env = makeEnv({ noPrimitives: true })
+  const mod = env.load()
+  assert.equal(typeof mod.apply, 'function', '缺 primitives 也要能加载')
+  const regs = []
+  assert.doesNotThrow(() => {
+    mod.apply({
+      effect() { return () => {} },
+      slots: { inject(s, r) { r() }, register(m, c) { regs.push({ m, c }); return () => {} } },
+    })
+  }, '缺 primitives 时 apply 不能抛')
+  for (const { m, c } of regs) {
+    assert.ok(c({}), m.name + ' 降级后仍应渲染出内容')
+  }
+})
 test('注入了样式，且样式带插件标记（便于清理/排查）', () => {
   const env = makeEnv()
   const mod = env.load()
   mod.apply({
     effect() { return () => {} },
-    slots: { inject(s, r) { r() }, register(m, c) { return () => {} } },
+    slots: { inject(s, r) { r() }, register() { return () => {} } },
   })
   assert.ok(env.styleTags.length >= 1, '应插入一个 <style>')
   const css = env.styleTags[0].textContent
@@ -253,121 +302,224 @@ test('注入了样式，且样式带插件标记（便于清理/排查）', () =
   assert.ok(css.indexOf('.dshns-') >= 0, '样式应包含本插件的类名前缀')
 })
 
-test('两个组件都能渲染成元素树而不抛错（含水位未就绪的早期状态）', () => {
+test('两个组件在设置未就绪时都能安全渲染', () => {
   const env = makeEnv()
   const mod = env.load()
-  const registrations = []
+  const comps = []
   mod.apply({
     effect() { return () => {} },
-    slots: { inject(s, r) { r() }, register(m, c) { registrations.push(c); return () => {} } },
+    slots: { inject(s, r) { r() }, register(m, c) { comps.push(c); return () => {} } },
   })
-
-  // runtime 已经 start()，但 fetch 是假的（返回 {}），settings 可能为 null。
-  // 组件在 settings 缺失时必须优雅降级，不能抛。
-  for (const comp of registrations) {
-    assert.doesNotThrow(() => comp({}), '组件在设置未就绪时不能抛错')
+  for (const c of comps) {
+    assert.doesNotThrow(() => env.mount(c, {}), '设置未就绪时组件不能抛错')
   }
 })
 
-test('组件能渲染出真实控件（设置行有事件选择、喇叭按钮是 <button>）', () => {
-  const env = makeEnv()
-  const mod = env.load()
-  const regs = []
-  mod.apply({
-    effect() { return () => {} },
-    slots: { inject(s, r) { r() }, register(m, c) { regs.push({ m, c }); return () => {} } },
-  })
+// ============================================================ 通用设置行
 
-  // 直接把 runtime 设置成"已就绪"，验证完整渲染路径
-  const rt = env.win.__DSH_NOTIFY__.runtime
-  rt.set({
-    ready: true,
-    settings: {
-      mode: 'on',
-      volume: 0.6,
-      muteWhenFocused: false,
-      events: {
-        done: { on: true, sound: 'default:done' },
-        question: { on: true, sound: 'default:question' },
-        approval: { on: true, sound: 'default:approval' },
-        error: { on: true, sound: 'default:error' },
-      },
-    },
-    sounds: { builtin: [{ id: 'default:done', name: 'D' }], custom: [] },
-  })
+test('通用设置行 = 标题 + 模式 + 试听图标 + 齿轮，且不内联整块设置', () => {
+  const { env, tree } = setupRow()
 
-  for (const { m, c } of regs) {
-    const tree = c({})
-    assert.ok(tree, m.name + ' 应渲染出内容')
+  assert.ok(collectText(tree).indexOf('声音提醒') >= 0, '应有标题「声音提醒」')
+
+  // 模式：官方 Menu 路径下是 Button 触发器，带 dshns-mode
+  const mode = find(tree, (n) => n.props && n.props.className && String(n.props.className).indexOf('dshns-mode') >= 0)
+  assert.ok(mode, '应有模式控件（读取 modeLabelOf 传入的当前值）')
+
+  // 试听：图标按钮，无文字（Button 替身会把 icon 放进 children，所以断言"没有文本"而非"没有子节点"）
+  const preview = find(tree, (n) => n.props && n.props.className === 'dshns-iconbtn' && /试听/.test(String(n.props.title || '')))
+  assert.ok(preview, '应有试听按钮')
+  assert.deepEqual(collectText(preview), [], '试听按钮应只有图标、没有文字（标签走 title/aria-label）')
+
+  // 齿轮
+  const gear = find(tree, (n) => n.props && n.props.className === 'dshns-iconbtn' && /设置/.test(String(n.props.title || '')))
+  assert.ok(gear, '应有齿轮设置按钮')
+
+  // 未点齿轮时不该有完整设置面板
+  assert.equal(find(tree, (n) => n.props && n.props.className === 'dshns-panel'), null,
+    '未点齿轮时不该内联渲染设置面板')
+})
+
+test('齿轮用的是与「通用设置」一致的官方图标（Medium 笔画，16px）', () => {
+  const { tree } = setupRow()
+  const icons = findAll(tree, (n) => n.type === 'Icon')
+  // 齿轮按钮内的图标：size 16（通用设置用的就是 Medium/16）
+  const gears = icons.filter((i) => i.props && i.props.size === 16)
+  assert.ok(gears.length >= 1, '齿轮图标应为 16px（与侧边栏「通用设置」一致）')
+})
+
+test('齿轮打开独立弹窗（官方 Modal），且面板里不再重复「模式」', () => {
+  const setup = setupRow()
+  const { tree, panel } = openPanel(setup)
+
+  // 外层必须是官方 Modal（独立窗口），不是内联 div
+  const modal = find(tree, (n) => n.type === 'Modal')
+  assert.ok(modal, '设置面板应由官方 Modal 承载（独立弹窗）')
+  assert.equal(modal.props.open, true)
+  assert.equal(typeof modal.props.onClose, 'function', '应当能关闭')
+
+  const texts = collectText(panel)
+  for (const t of ['声音提示', '音量', '前台不提示', '系统通知', '自定义音频']) {
+    assert.ok(texts.indexOf(t) >= 0, '设置面板应含「' + t + '」')
+  }
+  assert.equal(texts.indexOf('模式'), -1, '弹窗里不该再出现「模式」（它已在通用设置行上显示）')
+})
+
+test('设置面板：四个事件都同时出现在声音提示与系统通知两组里', () => {
+  const setup = setupRow()
+  const { panel } = openPanel(setup)
+  const texts = collectText(panel)
+  for (const label of ['任务完成', '需要我回答', '需要我授权', '出错']) {
+    const n = texts.filter((x) => x === label).length
+    assert.ok(n >= 2, '「' + label + '」应同时出现在两组里，实际 ' + n)
   }
 })
 
-test('设置行：模式改为下拉选择，且带三项标签', () => {
-  const env = setupRow()
-  const tree = env.row({})
-  const mode = find(tree, (n) => n.props && n.props.className === 'dshns-mode')
-  assert.ok(mode, '应渲染模式下拉（select.dshns-mode）')
-  assert.equal(mode.type, 'select', '模式必须用下拉而不是按钮组')
-  const labels = mode.children.map((o) => o.children.join(''))
-  assert.deepEqual(labels, ['开启声音提示', '关闭声音提示', '智能判断'])
-  // 旧的按钮组必须已经不存在
-  assert.equal(find(tree, (n) => n.props && n.props.className === 'dshns-seg'), null,
-    '按钮组 .dshns-seg 应该已被删除')
-})
+// ============================================================ 面板交互
 
-test('设置行：模式下拉 onChange 会保存所选模式', () => {
-  const env = setupRow()
-  let saved = null
-  env.rt.saveSettings = (patch) => { saved = patch; return Promise.resolve() }
-  const tree = env.row({})
-  const mode = find(tree, (n) => n.props && n.props.className === 'dshns-mode')
-  mode.props.onChange({ target: { value: 'smart' } })
-  // 注意：patch 对象在 vm 的 realm 里创建，deepStrictEqual 会因为原型不同而失败，
-  // 所以逐字段断言。
-  assert.ok(saved, 'onChange 应当调用 saveSettings')
-  assert.equal(saved.mode, 'smart')
-})
-
-test('设置行：试听按钮文本是「▶试听」', () => {
-  const env = setupRow()
-  const tree = env.row({})
-  // 只挑"试听"按钮（上传音频也是 .dshns-btn，但不是试听）
-  const btns = findAll(tree, (n) => n.props && n.props.className === 'dshns-btn' && n.props.title === '试听')
-  assert.equal(btns.length, 5, '四个事件行各一个 + 顶部一个，实际: ' + btns.length)
-  for (const b of btns) {
-    assert.equal(b.children.join(''), '▶试听', '试听按钮文本应带三角符号')
-  }
-})
-
-test('设置行：换声音后自动试听（不用再点按钮）', () => {
-  const env = setupRow()
+test('面板：四个声音下拉，换音后自动试听', () => {
+  const setup = setupRow()
   const played = []
-  env.rt.play = (id) => { played.push(id) }
-  const tree = env.row({})
-  const selects = findAll(tree, (n) => n.props && n.props.className === 'dshns-select')
-  assert.equal(selects.length, 4, '四个事件各一个声音下拉')
-  selects[0].props.onChange({ target: { value: 'preset:bell' } })
-  assert.equal(played.length, 1, '换完声音应当立刻试听')
+  setup.rt.play = (id) => { played.push(id) }
+  const { panel } = openPanel(setup)
+
+  const menus = findAll(panel, (n) => n.type === 'Menu')
+  const soundMenus = menus.filter((m) => ((m.props && m.props.items) || []).some((it) => it.id === 'preset:bell'))
+  assert.equal(soundMenus.length, 4, '四个事件各一个声音下拉，实际 ' + soundMenus.length)
+
+  soundMenus[0].props.onSelect('preset:bell')
+  assert.equal(played.length, 1, '换完声音应立刻试听一次')
   assert.equal(played[0], 'preset:bell', '试听的应是刚选中的那个')
 })
 
-test('设置行：「应用在前台运行时不提示」文案正确且可切换', () => {
-  const env = setupRow()
-  let saved = null
-  env.rt.saveSettings = (patch) => { saved = patch; return Promise.resolve() }
-  const tree = env.row({})
-  const texts = collectText(tree)
-  assert.ok(texts.indexOf('应用在前台运行时不提示') >= 0,
-    '应出现新文案，实际文本: ' + JSON.stringify(texts))
-  assert.equal(texts.indexOf('看着屏幕时不响'), -1, '旧文案不该残留')
+test('面板：系统通知总开关会申请权限并写入 system.enabled', () => {
+  // 权限未授予时才应当申请（已授予还弹权限框是骚扰）
+  const setup = setupRow({ notifyPermission: 'default' })
+  const saved = []
+  const permCalls = []
+  setup.rt.saveSettings = (patch) => { saved.push(patch); return Promise.resolve() }
+  setup.rt.requestPermission = () => { permCalls.push(1); return Promise.resolve('granted') }
+  const { panel } = openPanel(setup)
 
-  // 该文案旁边的复选框（音量行里最后一个 checkbox）
-  const boxes = findAll(tree, (n) => n.type === 'input' && n.props && n.props.type === 'checkbox')
-  const focusBox = boxes[boxes.length - 1]
-  focusBox.props.onChange({ target: { checked: true } })
-  assert.ok(saved, 'onChange 应当调用 saveSettings')
-  assert.equal(saved.muteWhenFocused, true)
+  const master = toggleByTitle(panel, '在系统通知中心弹出提醒')
+  assert.ok(master, '应能找到系统通知总开关')
+
+  master.props.onChange(true)
+  const patch = saved.find((p) => p.system && typeof p.system.enabled === 'boolean')
+  assert.ok(patch, '总开关应写入 system.enabled')
+  assert.equal(patch.system.enabled, true)
+  assert.equal(permCalls.length, 1, '权限未授予时，打开总开关应申请一次')
 })
+
+test('面板：权限已授予时不再申请', () => {
+  const setup = setupRow({ notifyPermission: 'granted' })
+  const permCalls = []
+  setup.rt.saveSettings = () => Promise.resolve()
+  setup.rt.requestPermission = () => { permCalls.push(1); return Promise.resolve('granted') }
+  const { panel } = openPanel(setup)
+  toggleByTitle(panel, '在系统通知中心弹出提醒').props.onChange(true)
+  assert.equal(permCalls.length, 0, '已授权时不该再弹权限请求')
+})
+
+test('面板：逐事件系统通知开关写入 system.events', () => {
+  // 总开关要先开着，逐事件开关才是"可切换"的（关闭时它们是禁用状态）
+  const setup = setupRow({ systemEnabled: true })
+  const saved = []
+  setup.rt.saveSettings = (patch) => { saved.push(patch); return Promise.resolve() }
+  const { tree } = openPanel(setup)
+
+  const sysToggles = findAll(tree, (n) => n.type === 'Switch' && n.props && String(n.props.title || '').indexOf('这个事件是否弹系统通知') >= 0)
+  assert.equal(sysToggles.length, 4, '四个事件各一个系统通知开关，实际 ' + sysToggles.length)
+  sysToggles[0].props.onChange(true)
+  const patch = saved.find((p) => p.system && p.system.events)
+  assert.ok(patch, '逐事件开关应写入 system.events')
+  const key = Object.keys(patch.system.events)[0]
+  assert.equal(patch.system.events[key], true)
+  assert.ok(['done', 'question', 'approval', 'error'].indexOf(key) >= 0, '键应是事件名: ' + key)
+})
+
+test('面板：逐事件开关在总开关关闭时禁用', () => {
+  const setup = setupRow()  // 默认 system.enabled = false
+  const { tree } = openPanel(setup)
+  const sysToggles = findAll(tree, (n) => n.type === 'Switch' && n.props && String(n.props.title || '').indexOf('先打开上面的系统通知总开关') >= 0)
+  assert.equal(sysToggles.length, 4, '总开关关闭时四个逐事件开关都应提示先开总开关，实际 ' + sysToggles.length)
+  for (const sw of sysToggles) {
+    assert.equal(sw.props.disabled, true, '总开关关闭时逐事件开关应禁用')
+  }
+})
+
+test('面板：音量与「应用在前台运行时不提示」可写', () => {
+  const setup = setupRow()
+  const saved = []
+  setup.rt.saveSettings = (patch) => { saved.push(patch); return Promise.resolve() }
+  const { tree, panel } = openPanel(setup)
+
+  const range = find(panel, (n) => n.type === 'input' && n.props && n.props.type === 'range')
+  assert.ok(range, '应有音量滑杆')
+  range.props.onChange({ target: { value: '0.3' } })
+  assert.equal(saved[saved.length - 1].volume, 0.3)
+
+  const focusToggle = toggleByTitle(tree, '应用在前台运行时不出声')
+  assert.ok(focusToggle, '应能找到「应用在前台运行时不提示」开关')
+  focusToggle.props.onChange(true)
+  assert.equal(saved[saved.length - 1].muteWhenFocused, true)
+
+  const texts = collectText(panel)
+  assert.ok(texts.indexOf('应用在前台运行时不提示') >= 0, '应出现「应用在前台运行时不提示」')
+  assert.equal(texts.indexOf('看着屏幕时不响'), -1, '旧文案不该残留')
+})
+
+// ============================================================ 系统通知
+
+function modWithRuntime(envOpts) {
+  const env = makeEnv(envOpts)
+  const mod = env.load()
+  mod.apply({
+    effect() { return () => {} },
+    slots: { inject(s, r) { r() }, register() { return () => {} } },
+  })
+  return { env, rt: env.win.__DSH_NOTIFY__.runtime }
+}
+
+test('系统通知：已授权时能弹出，标题按事件区分，tag 含事件类型', () => {
+  const { env, rt } = modWithRuntime({ permission: 'granted' })
+  assert.equal(rt.permission(), 'granted')
+  assert.equal(rt.notifySystem('question', false), true)
+  assert.equal(env.notifications.length, 1)
+  assert.equal(env.notifications[0].title, '需要你回答')
+  assert.ok(String(env.notifications[0].options.tag).indexOf('question') >= 0,
+    'tag 应含事件类型，便于同类通知合并')
+})
+
+test('系统通知：未授权时不弹（也不反复骚扰用户）', () => {
+  const { env, rt } = modWithRuntime({ permission: 'denied' })
+  assert.equal(rt.notifySystem('approval', false), false)
+  assert.equal(env.notifications.length, 0)
+})
+
+test('系统通知：环境不支持时安全降级', () => {
+  const { env, rt } = modWithRuntime({ notification: false })
+  assert.equal(rt.notificationsSupported(), false)
+  assert.doesNotThrow(() => rt.notifySystem('done', true))
+  assert.equal(env.notifications.length, 0)
+})
+
+test('系统通知：requestPermission 返回授权结果', async () => {
+  const { rt } = modWithRuntime({ permission: 'default' })
+  assert.equal(await rt.requestPermission(), 'granted')
+})
+
+test('系统通知：四类事件各有自己的标题', () => {
+  const { env, rt } = modWithRuntime({ permission: 'granted' })
+  for (const kind of ['done', 'question', 'approval', 'error']) {
+    rt.notifySystem(kind, false)
+  }
+  const titles = env.notifications.map((n) => n.title)
+  assert.deepEqual(titles, ['任务完成', '需要你回答', '需要你授权', '出错了'])
+  assert.equal(new Set(titles).size, 4, '四个标题应互不相同')
+})
+
+// ============================================================ 喇叭按钮
 
 test('喇叭按钮：提示文案为「已开启/已关闭提示音」，不含括号', () => {
   const env = makeEnv()
@@ -383,12 +535,12 @@ test('喇叭按钮：提示文案为「已开启/已关闭提示音」，不含�
   const rt = env.win.__DSH_NOTIFY__.runtime
 
   rt.set({ muted: false })
-  let btn = MuteButton({})
+  let btn = env.mount(MuteButton, {})
   assert.equal(btn.props['aria-label'], '已开启提示音')
   assert.equal(btn.props.title, '已开启提示音')
 
   rt.set({ muted: true })
-  btn = MuteButton({})
+  btn = env.mount(MuteButton, {})
   assert.equal(btn.props['aria-label'], '已关闭提示音')
   assert.equal(btn.props.title, '已关闭提示音')
   for (const t of [btn.props.title, btn.props['aria-label']]) {
@@ -396,11 +548,42 @@ test('喇叭按钮：提示文案为「已开启/已关闭提示音」，不含�
   }
 })
 
-// —— 上面几个测试共用的小工具 —
+// ============================================================ 生命周期
 
-/** 起一个插件实例，返回已就绪的 runtime 与设置行组件。 */
-function setupRow() {
+test('apply 是幂等的：重复调用不会叠加样式或残留旧实例', () => {
   const env = makeEnv()
+  const mod = env.load()
+  const mk = () => ({
+    effect() { return () => {} },
+    slots: { inject(s, r) { r() }, register() { return () => {} } },
+  })
+  mod.apply(mk())
+  const first = env.win.__DSH_NOTIFY__.runtime
+  mod.apply(mk())
+  const second = env.win.__DSH_NOTIFY__.runtime
+  assert.notEqual(first, second, '重复 apply 应换一个新 runtime')
+  assert.equal(env.styleTags.length, 1, '样式只应插入一次')
+})
+
+test('teardown 会释放 runtime', () => {
+  const env = makeEnv()
+  const mod = env.load()
+  let teardown = null
+  mod.apply({
+    effect(cb) { teardown = cb(); return () => {} },
+    slots: { inject(s, r) { r() }, register() { return () => {} } },
+  })
+  assert.equal(typeof teardown, 'function', 'effect 应返回清理函数')
+  assert.doesNotThrow(() => teardown())
+  assert.equal(env.win.__DSH_NOTIFY__.runtime, null)
+})
+
+// ============================================================ 测试工具
+
+/** 起一个插件实例，返回 env / 已就绪的 runtime / 设置行组件。 */
+function setupRow(opts) {
+  const o = opts || {}
+  const env = makeEnv(o)
   const mod = env.load()
   let row = null
   mod.apply({
@@ -413,8 +596,9 @@ function setupRow() {
   const rt = env.win.__DSH_NOTIFY__.runtime
   rt.set({
     ready: true,
+    notifyPermission: o.notifyPermission || 'granted',
     settings: {
-      mode: 'on',
+      mode: o.mode || 'on',
       volume: 0.6,
       muteWhenFocused: false,
       events: {
@@ -422,6 +606,10 @@ function setupRow() {
         question: { on: true, sound: 'default:question' },
         approval: { on: true, sound: 'default:approval' },
         error: { on: true, sound: 'default:error' },
+      },
+      system: {
+        enabled: !!o.systemEnabled,
+        events: { done: false, question: true, approval: true, error: false },
       },
     },
     sounds: {
@@ -435,10 +623,27 @@ function setupRow() {
       custom: [],
     },
   })
-  return { env, rt, row }
+  return { env, rt, row, tree: env.mount(row, {}) }
 }
 
-/** 在元素树里找第一个满足条件的节点。 */
+/** 点开齿轮，返回 { tree, panel }（tree 是整棵树，panel 是面板内容）。 */
+function openPanel(setup) {
+  const gear = find(setup.tree, (n) => n.props && n.props.className === 'dshns-iconbtn' && /设置/.test(String(n.props.title || '')))
+  assert.ok(gear, '应能找到齿轮按钮')
+  gear.props.onClick()
+  const tree = setup.env.mount(setup.row, {})
+  const panel = find(tree, (n) => n.props && n.props.className === 'dshns-panel')
+  assert.ok(panel, '点齿轮后应渲染设置面板')
+  return { tree, panel }
+}
+
+/** 按 title 找一个开关（比按下标稳：将来加行不会让测试错位）。 */
+function toggleByTitle(tree, title) {
+  const sw = findAll(tree, (n) => n.type === 'Switch' && n.props && String(n.props.title || '').indexOf(title) >= 0)
+  return sw[0]
+}
+
+/** 在宿主元素树里找第一个满足条件的节点。 */
 function find(node, pred) {
   if (!node || typeof node !== 'object') return null
   if (Array.isArray(node)) {
@@ -469,31 +674,3 @@ function collectText(node, out) {
   for (const c of node.children || []) collectText(c, out)
   return out
 }
-
-test('apply 是幂等的：重复调用不会叠加样式或残留旧实例', () => {
-  const env = makeEnv()
-  const mod = env.load()
-  const mk = () => ({
-    effect() { return () => {} },
-    slots: { inject(s, r) { r() }, register() { return () => {} } },
-  })
-  mod.apply(mk())
-  const first = env.win.__DSH_NOTIFY__.runtime
-  mod.apply(mk())
-  const second = env.win.__DSH_NOTIFY__.runtime
-  assert.notEqual(first, second, '重复 apply 应换一个新 runtime')
-  assert.equal(env.styleTags.length, 1, '样式只应插入一次（不能每次 apply 都加一个 <style>）')
-})
-
-test('teardown 会释放 runtime', () => {
-  const env = makeEnv()
-  const mod = env.load()
-  let teardown = null
-  mod.apply({
-    effect(cb) { teardown = cb(); return () => {} },
-    slots: { inject(s, r) { r() }, register() { return () => {} } },
-  })
-  assert.equal(typeof teardown, 'function', 'effect 应返回清理函数')
-  assert.doesNotThrow(() => teardown())
-  assert.equal(env.win.__DSH_NOTIFY__.runtime, null)
-})

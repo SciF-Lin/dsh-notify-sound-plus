@@ -155,6 +155,39 @@ try {
   $back = Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -TimeoutSec 5
   if ($back.settings.events.question.on -ne $false) { Bad "question 的 on=false 没有被持久化" }
   if ($back.settings.events.done.sound -ne 'preset:bell') { Bad "done 的音没有被持久化" }
+
+  # —— 系统通知：默认关 → 打开总开关后按事件弹；与静音是两条独立通道 ——
+  $defSys = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=question" -Method POST -TimeoutSec 5
+  if ($defSys.notify -ne $false) { Bad "系统通知总开关默认应为关，实际 notify=$($defSys.notify)" }
+  Ok "系统通知默认关闭：notify=$($defSys.notify)"
+
+  Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -Method POST -TimeoutSec 5 `
+    -ContentType 'application/json' -Body '{"system":{"enabled":true}}' | Out-Null
+  $onQ = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=question" -Method POST -TimeoutSec 5
+  if ($onQ.notify -ne $true) { Bad "打开总开关后 question 的 notify 应为 true，实际 $($onQ.notify)" }
+  $onDone = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=done" -Method POST -TimeoutSec 5
+  if ($onDone.notify -ne $false) { Bad "done 的系统通知默认应为关，实际 $($onDone.notify)" }
+  Ok "系统通知按事件生效：question=$($onQ.notify) done=$($onDone.notify)"
+
+  # 深合并：只改 events 不能把 enabled 抹掉
+  Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -Method POST -TimeoutSec 5 `
+    -ContentType 'application/json' -Body '{"system":{"events":{"error":true}}}' | Out-Null
+  $sysBack = Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -TimeoutSec 5
+  if ($sysBack.settings.system.enabled -ne $true) { Bad "system.enabled 被后续写入抹掉了" }
+  if ($sysBack.settings.system.events.error -ne $true) { Bad "system.events.error 没写进去" }
+  Ok "系统通知设置深合并正确（enabled 保留、error 写入）"
+
+  # 临时静音不该吞掉系统通知
+  Invoke-RestMethod -Uri "$Base/dsh-notify/mute.json" -Method POST -ContentType 'application/json' -Body '{"muted":true}' -TimeoutSec 5 | Out-Null
+  $mutedNotify = Invoke-RestMethod -Uri "$Base/dsh-notify/ping?kind=question" -Method POST -TimeoutSec 5
+  if ($mutedNotify.sound -ne 'none') { Bad "静音后 sound 应为 none" }
+  if ($mutedNotify.notify -ne $true) { Bad "静音不该影响系统通知，实际 notify=$($mutedNotify.notify)" }
+  Ok "两条通道独立：静音时 sound=$($mutedNotify.sound) 而 notify=$($mutedNotify.notify)"
+  Invoke-RestMethod -Uri "$Base/dsh-notify/mute.json" -Method POST -ContentType 'application/json' -Body '{"muted":false}' -TimeoutSec 5 | Out-Null
+
+  # 复位，避免影响后续断言
+  Invoke-RestMethod -Uri "$Base/dsh-notify/settings.json" -Method POST -TimeoutSec 5 `
+    -ContentType 'application/json' -Body '{"system":{"enabled":false,"events":{"error":false}}}' | Out-Null
   Ok "设置持久化到 $($back.settings | ConvertTo-Json -Compress)"
 
   # 声音目录 + 自定义音频上传/取回/删除
@@ -283,13 +316,42 @@ try {
 }
 finally {
   Step "清理"
+  # ⚠️ 只 Stop-Process `$Server.Id` 是不够的：Start-Process 拿到的是 dsh.cmd 这个
+  #    命令壳，真正监听端口的是它拉起的 "DeepSeek Harness.exe" 子进程；杀了壳，
+  #    子进程会变成孤儿继续占着端口（实测漏过好几次）。所以按端口找到真正的
+  #    持有者再杀，最后再扫一遍 rescue 实例兜底。
+  if ($Port) {
+    $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    foreach ($c in $conns) {
+      try {
+        Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+        Ok "已停止监听 $Port 的进程 (pid $($c.OwningProcess))"
+      } catch {}
+    }
+  }
   if ($Server -and -not $Server.HasExited) {
     Stop-Process -Id $Server.Id -Force -ErrorAction SilentlyContinue
-    Ok "已停止测试实例 (pid $($Server.Id))"
+    Ok "已停止命令壳 (pid $($Server.Id))"
   }
+  Start-Sleep -Milliseconds 600
+  # 兜底：任何还在跑 --profile rescue 的实例都说明是我们漏下的
+  $leftover = @(Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match '--expose-internals' -and $_.CommandLine -match '--profile\s+rescue\s+--port' })
+  foreach ($p in $leftover) {
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    Ok "已清理残留实例 (pid $($p.ProcessId))"
+  }
+  if ($leftover.Count -eq 0) { Ok "无残留实例" }
+
   # 确保路径就是我们要删的那个临时目录才动手
   if ($TempHome -and $TempHome.StartsWith($env:TEMP) -and (Test-Path $TempHome)) {
-    Remove-Item -Recurse -Force $TempHome -ErrorAction SilentlyContinue
-    Ok "已删除 $TempHome"
+    # 进程刚退出时日志文件可能还被句柄占着，重试几次
+    for ($i = 0; $i -lt 5; $i++) {
+      Remove-Item -Recurse -Force $TempHome -ErrorAction SilentlyContinue
+      if (-not (Test-Path $TempHome)) { break }
+      Start-Sleep -Milliseconds 400
+    }
+    if (Test-Path $TempHome) { Write-Host "  [warn] 临时目录未完全删除: $TempHome" -ForegroundColor Yellow }
+    else { Ok "已删除 $TempHome" }
   }
 }

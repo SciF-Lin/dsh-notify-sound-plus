@@ -515,6 +515,92 @@ test('非 smart 模式下小鲸鱼的开关不影响我们', async () => {
   assert.equal((await stateOf(h.routes)).json.sound, 'default:done')
 })
 
+// ============================================================ 系统通知判定
+
+test('系统通知：默认只对「需要你处理」的两类开启', async () => {
+  const h = boot()
+  await setSettings(h.routes, { system: { enabled: true } })
+  const s = session('s1')
+
+  h.emit('session/event', s, ev('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'ask_user_question', arguments: '{}' }))
+  assert.equal((await stateOf(h.routes)).json.notify, true, 'question 默认开')
+
+  h.emit('session/event', s, ev('approval/asked', { id: 'a1' }))
+  assert.equal((await stateOf(h.routes)).json.notify, true, 'approval 默认开')
+
+  h.emit('session/event', s, ev('turn/end', { turn: 2, reason: { kind: 'completed' } }))
+  assert.equal((await stateOf(h.routes)).json.notify, false, 'done 默认关（纯播报，不打扰）')
+
+  h.emit('session/event', s, ev('turn/end', { turn: 3, reason: { kind: 'error', error: { message: 'x', code: 'y' } } }))
+  assert.equal((await stateOf(h.routes)).json.notify, false, 'error 默认关')
+})
+
+test('系统通知：总开关关闭时一律不弹（但通知本身照常产生）', async () => {
+  const h = boot()
+  // 默认 system.enabled = false
+  h.emit('session/event', session('s1'), ev('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'ask_user_question', arguments: '{}' }))
+  const st = (await stateOf(h.routes)).json
+  assert.equal(st.kind, 'question')
+  assert.equal(st.notify, false, '总开关关闭时不弹系统通知')
+})
+
+test('系统通知：可逐事件打开 done', async () => {
+  const h = boot()
+  await setSettings(h.routes, { system: { enabled: true, events: { done: true } } })
+  h.emit('session/event', session('s1'), ev('turn/end', { turn: 1, reason: { kind: 'completed' } }))
+  assert.equal((await stateOf(h.routes)).json.notify, true)
+})
+
+test('系统通知与声音是两条独立通道：临时静音只静声音，不影响系统通知', async () => {
+  const h = boot()
+  await setSettings(h.routes, { system: { enabled: true, events: { question: true } } })
+  await getJson(h.routes, '/dsh-notify/mute.json', { method: 'POST', body: JSON.stringify({ muted: true }) })
+
+  h.emit('session/event', session('s1'), ev('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'ask_user_question', arguments: '{}' }))
+  const st = (await stateOf(h.routes)).json
+  assert.equal(st.sound, 'none', '静音后不出声')
+  assert.equal(st.notify, true, '系统通知仍要弹（你不在看屏幕时才更需要它）')
+})
+
+test('系统通知：system 设置能深合并（改 events 不抹掉 enabled）', async () => {
+  const h = boot()
+  await setSettings(h.routes, { system: { enabled: true, events: { error: true } } })
+  await setSettings(h.routes, { system: { events: { done: true } } })
+
+  const st = await getJson(h.routes, '/dsh-notify/settings.json')
+  assert.equal(st.json.settings.system.enabled, true, 'enabled 不该被抹掉')
+  assert.equal(st.json.settings.system.events.error, true, '先前打开的 error 不该被抹掉')
+  assert.equal(st.json.settings.system.events.done, true, '新写的 done 应生效')
+})
+
+test('系统通知：设置落盘后新实例能读回', async () => {
+  const h = boot()
+  await setSettings(h.routes, { system: { enabled: true, events: { done: true } } })
+
+  const h2 = makeContext()
+  plugin.apply(h2.ctx, {})
+  h2.ready()
+  const st = await getJson(h2.routes, '/dsh-notify/settings.json')
+  assert.equal(st.json.settings.system.enabled, true)
+  assert.equal(st.json.settings.system.events.done, true)
+})
+
+test('系统通知：非法输入不会污染设置', async () => {
+  const h = boot()
+  await setSettings(h.routes, { system: { enabled: 'yes', events: { done: 'maybe' } } })
+  const st = await getJson(h.routes, '/dsh-notify/settings.json')
+  assert.equal(typeof st.json.settings.system.enabled, 'boolean', 'enabled 必须仍是布尔')
+  assert.equal(typeof st.json.settings.system.events.done, 'boolean', '逐事件开关必须仍是布尔')
+})
+
+test('ping ?force=1 时 notify 也为 true；非 force 时按设置来', async () => {
+  const h = boot()
+  const p = await getJson(h.routes, '/dsh-notify/ping?force=1', { method: 'POST' })
+  assert.equal(p.json.notify, true)
+  const p2 = await getJson(h.routes, '/dsh-notify/ping', { method: 'POST' })
+  assert.equal(p2.json.notify, false, '非 force 时按设置来（默认 system 关）')
+})
+
 // ============================================================ 自定义音频
 
 const TINY_WAV = Buffer.from([
