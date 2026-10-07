@@ -1,0 +1,17 @@
+# 目录条目草稿 —— 提交到 awesome-dsh-plugin 仓库时用
+#
+# 目标路径：data/plugins/<owner>__<repo>.yml
+# 目标仓库：https://github.com/awesome-dsh-plugin/awesome-dsh-plugin
+#
+# ⚠️ 提交前必须：
+#   1) 把 <you> 换成你的 GitHub 用户名（url 必须与仓库地址完全一致）
+#   2) 确认仓库已公开、已打 dsh-plugin topic、且创建满 1 天
+#
+# ⚠️ YAML 注意：description 里含 ": " 会被解析成嵌套键，所以这里用单引号包住。
+
+url: https://github.com/<you>/dsh-notify-sound-plus
+name: <you>/dsh-notify-sound-plus
+category: notify
+description:
+  en: 'Four synthesized notification sounds for DeepSeek Harness — turn-complete, question, approval and error — each independently configurable and auditionable from a General-settings row, with optional custom audio upload and a temporary mute button in the composer. Zero bundled audio assets: every tone is generated at runtime with the Web Audio API. Works on both the web GUI and the Electron desktop app.'
+  zh: 'DSH 提示音插件：任务完成 / 需要回答 / 需要授权 / 出错四类事件各用一段 Web Audio 实时合成的旋律提醒，可在「通用设置」里逐个试听与选音、上传自定义音频，对话输入框左下角有临时静音喇叭；不随包分发任何音频文件；网页端与桌面端（Electron）均可用。'

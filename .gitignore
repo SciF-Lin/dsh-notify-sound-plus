@@ -1,0 +1,14 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地临时
+*.log
+tmp/
+.tmp/
