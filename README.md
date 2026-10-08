@@ -55,8 +55,8 @@
 # ① 从 GitHub 仓库直接安装（推荐）
 dsh plugin --profile web add github:SciF-Lin/dsh-notify-sound-plus
 
-# ② 用 Releases 里的安装包
-dsh plugin --profile web add https://github.com/SciF-Lin/dsh-notify-sound-plus/releases/download/v2.0.0/dsh-notify-sound-plus-2.0.0.tgz
+# ② 用 Releases 里的安装包（固定地址，始终指向最新版）
+dsh plugin --profile web add https://github.com/SciF-Lin/dsh-notify-sound-plus/releases/latest/download/dsh-notify-sound-plus.tgz
 
 # ③ 从 npm 安装
 dsh plugin --profile web add dsh-notify-sound-plus

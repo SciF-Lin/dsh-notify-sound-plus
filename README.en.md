@@ -55,8 +55,8 @@ Pick any of the three methods — **the first one is recommended** (installs str
 # ① Install directly from the GitHub repository (recommended)
 dsh plugin --profile web add github:SciF-Lin/dsh-notify-sound-plus
 
-# ② Install from the release package
-dsh plugin --profile web add https://github.com/SciF-Lin/dsh-notify-sound-plus/releases/download/v2.0.0/dsh-notify-sound-plus-2.0.0.tgz
+# ② Install from the release package (stable URL, always the newest version)
+dsh plugin --profile web add https://github.com/SciF-Lin/dsh-notify-sound-plus/releases/latest/download/dsh-notify-sound-plus.tgz
 
 # ③ Install from npm
 dsh plugin --profile web add dsh-notify-sound-plus
