@@ -1,6 +1,6 @@
 {
   "name": "dsh-notify-sound-plus",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "DSH 提示音插件：任务完成 / 需要回答 / 需要授权 / 出错时用 Web Audio 实时合成提示音提醒，可在「通用设置」逐事件选音、上传自定义音频，对话左下角有临时静音喇叭；兼容 DeepSeek Harness 桌面端（Electron）与网页端。",
   "keywords": [
     "dsh",

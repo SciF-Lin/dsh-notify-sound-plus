@@ -96,25 +96,41 @@ window.__ModuleLoader__.load({
 
     // ============================================================ 合成音色表
     // 每个音符 { f: 频率Hz, t: 起始秒, d: 持续秒, p: 峰值, w: 波形 }
-    // 四段默认旋律的音高集合互不相同，闭眼也能分辨是哪个事件。
+    //
+    // 四种默认音刻意在**四个维度上同时拉开**，而不是只换几个音高 —— 只换音高
+    // 最容易听混（旧版 done 与 error 都是「下行双音 + 正弦」，实际很难分辨）：
+    //
+    //   事件     音区        音色      走向        节奏/长短
+    //   完成    很高(G6)    正弦      单响        一击 + 长余韵
+    //   提问    中高        三角      上行        两音
+    //   授权    中          方波      同音重复    三等距短脉冲
+    //   出错    偏低        锯齿      下行        两音 + 长尾
+    //
+    // 音区错开约一个八度，音色四种全不同，节奏型互不重复 —— 任一听觉维度都能区分。
+    // 频率都留在 260Hz 以上，笔记本小喇叭也能放出低频段那两声。
     var TONES = {
+      // 完成：很高音区的单响铃（和弦同时发声）+ 泛音，最长余韵，全程只有一个起音
+      // 基频取 C6 而不是更高的音，避免这个最常触发的事件听起来刺耳
       'default:done': [
-        { f: 1318.51, t: 0.0, d: 0.16, p: 0.5, w: 'sine' },
-        { f: 880.0, t: 0.15, d: 0.34, p: 0.46, w: 'sine' },
+        { f: 1046.5, t: 0.0, d: 0.9, p: 0.4, w: 'sine' },
+        { f: 1567.98, t: 0.0, d: 0.6, p: 0.14, w: 'sine' },
+        { f: 2093.0, t: 0.0, d: 0.4, p: 0.07, w: 'sine' },
       ],
+      // 提问：中高音区两音上行（三角波），像把尾音抬起来的问句
       'default:question': [
-        { f: 1174.66, t: 0.0, d: 0.14, p: 0.42, w: 'sine' },
-        { f: 1479.98, t: 0.13, d: 0.14, p: 0.42, w: 'sine' },
-        { f: 1760.0, t: 0.26, d: 0.36, p: 0.44, w: 'sine' },
+        { f: 880.0, t: 0.0, d: 0.12, p: 0.4, w: 'triangle' },
+        { f: 1318.51, t: 0.14, d: 0.5, p: 0.42, w: 'triangle' },
       ],
+      // 授权：中音区同一个音连敲三下（方波），靠节奏而不是音高辨认
       'default:approval': [
-        { f: 880.0, t: 0.0, d: 0.11, p: 0.5, w: 'triangle' },
-        { f: 880.0, t: 0.17, d: 0.11, p: 0.5, w: 'triangle' },
-        { f: 1318.51, t: 0.34, d: 0.4, p: 0.5, w: 'triangle' },
+        { f: 587.33, t: 0.0, d: 0.08, p: 0.4, w: 'square' },
+        { f: 587.33, t: 0.15, d: 0.08, p: 0.4, w: 'square' },
+        { f: 587.33, t: 0.3, d: 0.08, p: 0.4, w: 'square' },
       ],
+      // 出错：偏低音区下行长音（锯齿波），唯一带粗糙感的负向音色
       'default:error': [
-        { f: 783.99, t: 0.0, d: 0.2, p: 0.44, w: 'sine' },
-        { f: 523.25, t: 0.19, d: 0.5, p: 0.5, w: 'sine' },
+        { f: 466.16, t: 0.0, d: 0.22, p: 0.32, w: 'sawtooth' },
+        { f: 349.23, t: 0.2, d: 0.75, p: 0.36, w: 'sawtooth' },
       ],
       'preset:chime': [
         { f: 1567.98, t: 0.0, d: 0.22, p: 0.46, w: 'sine' },
@@ -126,13 +142,35 @@ window.__ModuleLoader__.load({
         { f: 1318.51, t: 0.02, d: 0.7, p: 0.16, w: 'sine' },
       ],
       'preset:soft': [
-        { f: 659.25, t: 0.0, d: 0.26, p: 0.3, w: 'sine' },
-        { f: 987.77, t: 0.18, d: 0.5, p: 0.28, w: 'sine' },
+        { f: 659.25, t: 0.0, d: 0.3, p: 0.26, w: 'sine' },
+        { f: 987.77, t: 0.2, d: 0.55, p: 0.24, w: 'sine' },
       ],
       'preset:alert': [
         { f: 987.77, t: 0.0, d: 0.12, p: 0.42, w: 'square' },
         { f: 987.77, t: 0.2, d: 0.12, p: 0.42, w: 'square' },
         { f: 987.77, t: 0.4, d: 0.2, p: 0.42, w: 'square' },
+      ],
+      // 水滴：极短的高音一点，几乎不占时间
+      'preset:drop': [
+        { f: 2093.0, t: 0.0, d: 0.07, p: 0.4, w: 'sine' },
+        { f: 1567.98, t: 0.05, d: 0.18, p: 0.22, w: 'sine' },
+      ],
+      // 叩门：低音区两记短促叩击
+      'preset:knock': [
+        { f: 261.63, t: 0.0, d: 0.09, p: 0.44, w: 'triangle' },
+        { f: 261.63, t: 0.17, d: 0.09, p: 0.44, w: 'triangle' },
+      ],
+      // 上扬：四音快速上行，收在长音上
+      'preset:rise': [
+        { f: 523.25, t: 0.0, d: 0.09, p: 0.32, w: 'triangle' },
+        { f: 659.25, t: 0.08, d: 0.09, p: 0.34, w: 'triangle' },
+        { f: 783.99, t: 0.16, d: 0.09, p: 0.36, w: 'triangle' },
+        { f: 1046.5, t: 0.24, d: 0.42, p: 0.38, w: 'triangle' },
+      ],
+      // 低鸣：单声低沉长音，最不打扰的一种
+      'preset:hum': [
+        { f: 261.63, t: 0.0, d: 0.85, p: 0.3, w: 'sine' },
+        { f: 523.25, t: 0.0, d: 0.5, p: 0.1, w: 'sine' },
       ],
     }
 
@@ -148,6 +186,9 @@ window.__ModuleLoader__.load({
       '.dshns-row{border-bottom:.5px solid var(--dsw-alias-border-l2);padding:16px 0;display:flex;flex-direction:column;gap:10px}',
       '.dshns-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dshns-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;flex:1;min-width:120px}',
+      // 标题前的喇叭符号：作为一个独立 span，既不进可读文本（aria-hidden），
+      // 也不影响断言/搜索标题文字。
+      '.dshns-titleIcon{display:inline-block;margin-right:6px;font-size:13px;line-height:1}',
       '.dshns-mode{flex:none}',
       '.dshns-btn{border:none;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;padding:6px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}',
       '.dshns-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}',
@@ -1100,7 +1141,7 @@ window.__ModuleLoader__.load({
 
       if (!settings) {
         return h('div', { className: 'dshns-row' },
-          h('div', { className: 'dshns-title' }, '声音提醒'),
+          h('div', { className: 'dshns-title' }, h('span', { className: 'dshns-titleIcon', 'aria-hidden': 'true' }, '🔊'), '声音提醒'),
           h('div', { className: 'dshns-hint' }, s.error || '正在读取设置…'),
         )
       }
@@ -1109,7 +1150,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'dshns-row' },
         h('div', { className: 'dshns-head' },
-          h('div', { className: 'dshns-title' }, '声音提醒'),
+          h('div', { className: 'dshns-title' }, h('span', { className: 'dshns-titleIcon', 'aria-hidden': 'true' }, '🔊'), '声音提醒'),
           h(Dropdown, {
             items: MODE_OPTIONS.map(function (m) { return { id: m.id, label: m.label } }),
             value: settings.mode,
@@ -1227,7 +1268,7 @@ window.__ModuleLoader__.load({
       // runtime 用 getter 暴露 —— 直接存快照会在 teardown 后留一个已释放的旧对象。
       try {
         window.__DSH_NOTIFY__ = {
-          version: '2.0.0',
+          version: '2.1.0',
           get runtime() { return runtime },
           get state() { return runtime ? runtime.state : null },
           play: function (id) { if (runtime) runtime.play(id, { force: true }) },

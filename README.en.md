@@ -36,14 +36,23 @@ Its position inside General settings, right below **「字号大小」** (font s
 
 ## The four alerts
 
-|Event|Recommended sound|
-|-|-|
-|Task completed|Two descending tones — a crisp "ding-dong"|
-|Needs your answer|Three ascending tones, like a question|
-|Needs your approval|Three low tones, a knocking feel|
-|Run failed|A low downward sweep — you know something broke|
+The four defaults differ across **register, timbre and rhythm** — any one of those is enough to tell them apart, so you never have to compare pitches by ear:
 
-Four more built-in tones — "ding-dong / bell / soft / alert" — are available per event.
+|Event|Default sound|What it sounds like|
+|-|-|-|
+|Task completed|High single strike (sine) with overtones|One hit, longest ring, bright and clean|
+|Needs your answer|Two notes rising, mid-high (triangle)|Tail lifts upward, like a question|
+|Needs your approval|One mid note struck three times (square)|Identified by rhythm — knock, knock, knock|
+|Run failed|Low descending sustain (sawtooth)|The only rough-edged, negative-sounding tone|
+
+Eight more built-in tones are available per event, grouped by register and rhythm:
+
+- **Descending**: chime (two falling notes)
+- **Sustained**: bell (long ring), hum (single low tone)
+- **Short**: drop (very brief high blip), knock (two low knocks), alert (three square pulses)
+- **Ascending**: soft (quiet two-note rise), rise (four notes going up)
+
+Any event can be pointed at any of them, or at an audio file you upload.
 
 ## Installation
 

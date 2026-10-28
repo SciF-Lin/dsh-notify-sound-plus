@@ -343,7 +343,13 @@ test('两个组件在设置未就绪时都能安全渲染', () => {
 test('通用设置行 = 标题 + 模式 + 试听图标 + 齿轮，且不内联整块设置', () => {
   const { env, tree } = setupRow()
 
-  assert.ok(collectText(tree).indexOf('声音提醒') >= 0, '应有标题「声音提醒」')
+  const joined = collectText(tree).join('')
+  assert.ok(joined.indexOf('声音提醒') >= 0, '应有标题「声音提醒」')
+  // 标题前的喇叭符号：方便在设置列表里一眼找到
+  const titleIcon = find(tree, (n) => n.props && n.props.className === 'dshns-titleIcon')
+  assert.ok(titleIcon, '标题前应有喇叭符号')
+  assert.equal(collectText(titleIcon).join(''), '🔊')
+  assert.equal(titleIcon.props['aria-hidden'], 'true', '装饰性符号应对读屏隐藏')
 
   // 模式：官方 Menu 路径下是 Button 触发器，带 dshns-mode
   const mode = find(tree, (n) => n.props && n.props.className && String(n.props.className).indexOf('dshns-mode') >= 0)
@@ -601,6 +607,90 @@ test('文案口径统一：用「提醒」而非「声音提示」，且不留�
   assert.ok(src.indexOf('与小鲸鱼挂件协助提醒（未开启事件由本插件提醒）') >= 0)
   assert.ok(src.indexOf('仅在后台运行时提醒') >= 0)
   assert.ok(src.indexOf('需要回答 / 授权 / 任务完成时 系统通知 · 权限：') >= 0)
+})
+
+// ============================================================ 默认音可辨识度
+
+test('client 暴露的版本号必须与 package.json 一致（发版时容易漏改）', () => {
+  const m = CLIENT_SRC.match(/version:\s*'([0-9][0-9.]*)'/)
+  assert.ok(m, 'client 里应暴露版本号（调试入口 window.__DSH_NOTIFY__.version）')
+  assert.equal(m[1], PKG.version, 'client 版本号与 package.json 不一致')
+})
+
+test('四个默认音必须在音色 / 走向 / 节奏上两两可区分（不只换音高）', () => {
+  // 从源码里解析 TONES，避免为了测试而改动生产 API。
+  const block = CLIENT_SRC.slice(CLIENT_SRC.indexOf('var TONES = {'), CLIENT_SRC.indexOf('var EVENT_META'))
+  function notesOf(id) {
+    const at = block.indexOf("'" + id + "': [")
+    assert.ok(at >= 0, '找不到音色 ' + id)
+    const end = block.indexOf(']', at)
+    const body = block.slice(at, end)
+    const notes = []
+    const re = /\{ f: ([\d.]+), t: ([\d.]+), d: ([\d.]+), p: ([\d.]+), w: '([a-z]+)' \}/g
+    let m
+    while ((m = re.exec(body))) {
+      notes.push({ f: Number(m[1]), t: Number(m[2]), d: Number(m[3]), p: Number(m[4]), w: m[5] })
+    }
+    return notes
+  }
+
+  function signature(id) {
+    const n = notesOf(id)
+    assert.ok(n.length >= 1, id + ' 应至少有一个音')
+    const pitches = n.map((x) => x.f)
+    const waves = Array.from(new Set(n.map((x) => x.w))).sort().join('+')
+    // 起音个数：起始时间不同的音 = 听到的「次数」
+    const attacks = Array.from(new Set(n.map((x) => x.t))).length
+    // 走向：按起始时间排序后的音高趋势
+    const ordered = n.slice().sort((a, b) => a.t - b.t).map((x) => x.f)
+    let contour = 'flat'
+    if (ordered.length > 1) {
+      const up = ordered[ordered.length - 1] > ordered[0]
+      const down = ordered[ordered.length - 1] < ordered[0]
+      contour = up ? 'up' : down ? 'down' : 'flat'
+    }
+    const top = Math.max.apply(null, pitches)
+    return {
+      waves,
+      attacks,
+      contour,
+      // 音区按最高音分档，避免「只挪几赫兹」被当成不同音区
+      band: top >= 1400 ? 'very-high' : top >= 900 ? 'high' : top >= 700 ? 'mid' : 'low',
+    }
+  }
+
+  const kinds = ['default:done', 'default:question', 'default:approval', 'default:error']
+  const sig = {}
+  for (const k of kinds) sig[k] = signature(k)
+
+  // 四个默认音必须用到四种不同音色 —— 这是最容易分辨的维度
+  const waves = kinds.map((k) => sig[k].waves)
+  assert.equal(new Set(waves).size, 4, '四个默认音应各用一种音色，实际: ' + waves.join(' / '))
+
+  // 且两两之间至少还要在「走向」或「节奏」上再差一项
+  for (let i = 0; i < kinds.length; i++) {
+    for (let j = i + 1; j < kinds.length; j++) {
+      const a = sig[kinds[i]]
+      const b = sig[kinds[j]]
+      const differ = (a.contour !== b.contour ? 1 : 0) + (a.attacks !== b.attacks ? 1 : 0) + (a.band !== b.band ? 1 : 0)
+      assert.ok(differ >= 2,
+        kinds[i] + ' 与 ' + kinds[j] + ' 区分度不足（走向/节奏/音区合计只差 ' + differ + ' 项）')
+    }
+  }
+})
+
+test('新增的内置音色在客户端都有合成定义，不会出现「选了没声音」', () => {
+  // 宿主目录里的每个内置 id（除静音）都必须能在客户端 TONES 里找到
+  const catalog = fs.readFileSync(path.join(PKG_ROOT, 'lib', 'index.js'), 'utf8')
+  const ids = []
+  const re = /\{ id: '([a-z]+:[a-z]+)', name: '/g
+  let m
+  while ((m = re.exec(catalog))) ids.push(m[1])
+  assert.ok(ids.length >= 12, '内置音色目录应有足够多的选择，实际 ' + ids.length)
+  for (const id of ids) {
+    assert.ok(CLIENT_SRC.indexOf("'" + id + "': [") >= 0,
+      '客户端缺少 ' + id + ' 的合成定义（目录里有但点了没声音）')
+  }
 })
 
 // ============================================================ 面板交互
